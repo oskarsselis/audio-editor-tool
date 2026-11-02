@@ -47,6 +47,7 @@ Edit (3 parts):
 | `--snap bar\|beat\|none` | `bar` | Snapping for `--parts` edges. |
 | `--xfade BEATS` | `0.5` | Crossfade length in beats (4 = one bar in 4/4). |
 | `--blend crossfade\|eq\|overlay` | `crossfade` | `eq` is a DJ-style bass swap: mids and highs blend, and the bass hands over on the downbeat. `overlay` starts the next part at full volume underneath the end of the previous one, and `--xfade` sets the overlap. |
+| `--fx riser,swell,echo,sweep` | – | Transition effects at each join: `riser` (noise sweep up to the next downbeat), `swell` (reverse reverb of the next part's first hit), `echo` (tempo-synced echoes of the last beat), `sweep` (high-pass filter drains the bass in the last bar). Combine them with commas. |
 | `--hold 0-1` | `0.5` | For overlay: the share of the overlap where the previous part stays at full volume before fading. |
 | `--blend-pos before\|center\|after` | `before` | Where the blend sits: `before` lets the new part's downbeat hit at full volume, and `after` lets the old part's tail (e.g. a held vocal) carry over. |
 | `--fade-out SEC` | `4` | Fade-out length when the real ending isn't used. |

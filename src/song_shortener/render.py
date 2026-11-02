@@ -105,7 +105,8 @@ def _limit(x: np.ndarray, sr: int, ceiling: float = 0.98) -> np.ndarray:
 
 def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural_end: bool,
            xfade_s: float | list[float], fade_out_s: float, blend: str = "crossfade",
-           position: str = "before", hold: float = 0.5) -> np.ndarray:
+           position: str = "before", hold: float = 0.5,
+           fx: list[str] | None = None, beat_s: float | None = None) -> np.ndarray:
     """Join parts. position: where the blend sits relative to the cut —
     'before' (new part's downbeat hits at full volume), 'center', or 'after'
     (old part's tail, e.g. a held vocal, rings over the new part's start)."""
@@ -115,6 +116,8 @@ def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural
         position = "before"
     f = {"before": 1.0, "center": 0.5, "after": 0.0}[position]
     pieces = []
+    joins = []                     # (cut in output, outgoing end, incoming start) in samples
+    length = 0
     for idx, (t0, t1) in enumerate(times):
         L = Ls[min(idx, len(Ls) - 1)]
         pre, post = int(round(f * L)), L - int(round(f * L))
@@ -124,6 +127,7 @@ def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural
         a = s + (prev_post if idx > 0 else 0) + (prev_L if idx > 0 and blend == "overlay" else 0)
         b = e - (pre if idx < n - 1 else 0)
         pieces.append(audio[:, a:b])
+        length += pieces[-1].shape[1]
         if idx < n - 1:
             nb = int(times[idx + 1][0] * sr)
             xa = audio[:, e - pre:e + post]
@@ -131,11 +135,18 @@ def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural
                 xb = audio[:, nb:nb + L]
                 m = min(xa.shape[1], xb.shape[1])
                 pieces.append(_overlay(xa[:, :m], xb[:, :m], sr, hold))
+                joins.append((length, e, nb))
+                length += m
                 continue
             xb = audio[:, nb - pre:nb + post]
             m = min(xa.shape[1], xb.shape[1])
             pieces.append(_blend(xa[:, :m], xb[:, :m], pre, sr, blend))
+            joins.append((length + pre, e, nb))
+            length += m
     out = np.concatenate(pieces, axis=1).astype(np.float32)
+    if fx:
+        from .fx import apply
+        out = apply(out, audio, sr, joins, beat_s, fx)
 
     if times[0][0] > 0:                          # started mid-song: avoid a click
         r = min(int(0.01 * sr), out.shape[1])

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+
+import numpy as np
 import sys
 from pathlib import Path
 
@@ -62,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--blend-pos", choices=["before", "center", "after"], default="before",
                     help="blend before the cut (new downbeat at full volume), centered, or after "
                          "(old part's tail, e.g. a held vocal, carries over)")
+    ap.add_argument("--fx", metavar="LIST", default="",
+                    help="transition effects at each join, comma-separated: "
+                         "riser, swell (reverse reverb), echo (echo-out), sweep (high-pass filter)")
     ap.add_argument("-p", "--parts", metavar="START-END,...",
                     help="choose the parts yourself instead of -l, e.g. 1:41-1:58,2:27-2:44")
     ap.add_argument("--snap", choices=["bar", "beat", "none"], default="bar",
@@ -135,8 +140,15 @@ def finish(args, audio, sr, a, beat, times, joins, natural_end) -> int:
     if args.blend == "overlay":
         xfades = [overlap_len(a, t1, args.xfade) for _, t1 in times]
         xfade_s = xfades[0]
+    fx = [f.strip() for f in args.fx.split(",") if f.strip()]
+    from .fx import FX
+    for f in fx:
+        if f not in FX:
+            raise SystemExit(f"Unknown effect '{f}'. Choose from: {', '.join(FX)}")
+    near = a.beats[np.abs(a.beats - times[0][1]) < 10]
+    beat_s = float(np.polyfit(np.arange(len(near)), near, 1)[0]) if len(near) > 4 else beat
     out = render(audio, sr, times, natural_end, xfades, args.fade_out,
-                 blend=args.blend, position=args.blend_pos, hold=args.hold)
+                 blend=args.blend, position=args.blend_pos, hold=args.hold, fx=fx, beat_s=beat_s)
 
     in_path = Path(args.input)
     out_path = Path(args.output) if args.output else in_path.with_name(
@@ -151,7 +163,8 @@ def finish(args, audio, sr, a, beat, times, joins, natural_end) -> int:
         pos += t1 - t0 - (xfade_s if args.blend == "overlay" and idx < len(times) - 1 else 0)
     if len(times) > 1:
         where = f"hold {args.hold:g}" if args.blend == "overlay" else f"{args.blend_pos} the cut"
-        print(f"  blend: {args.blend}, {args.xfade:g} beats ({xfade_s:.2f}s), {where}")
+        print(f"  blend: {args.blend}, {args.xfade:g} beats ({xfade_s:.2f}s), {where}"
+              + (f", fx: {', '.join(fx)}" if fx else ""))
     print(f"  ending: {'original outro' if natural_end else f'{args.fade_out:g}s fade-out'}")
     target = f", target {fmt(args.length)}" if args.length else ""
     print(f"\nSaved {out_path}  ({fmt(out.shape[1] / sr)}{target})")
@@ -161,7 +174,7 @@ def finish(args, audio, sr, a, beat, times, joins, natural_end) -> int:
             "input": str(in_path), "output": str(out_path), "tempo": a.tempo,
             "parts": [{"from": round(t0, 3), "to": round(t1, 3)} for t0, t1 in times],
             "transition_match": [round(x, 3) for x in joins],
-            "blend": args.blend, "xfade_beats": args.xfade, "blend_pos": args.blend_pos,
+            "blend": args.blend, "fx": fx, "xfade_beats": args.xfade, "blend_pos": args.blend_pos,
             "natural_end": natural_end, "duration": round(out.shape[1] / sr, 3),
         }, indent=2))
     return 0
