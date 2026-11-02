@@ -32,6 +32,15 @@ def segment_times(a: Analysis, p: Plan) -> list[tuple[float, float]]:
     return times
 
 
+def overlap_len(a: Analysis, t_end: float, beats: float) -> float:
+    """Overlap length ending at t_end that spans whole beats of the real beat grid."""
+    near = a.beats[np.abs(a.beats - t_end) < 10]
+    # Line fit over ~20 beats: precise even though each beat time is frame-quantized
+    period = float(np.polyfit(np.arange(len(near)), near, 1)[0]) if len(near) > 4 else 60 / a.tempo
+    start = _refine(a, t_end - beats * period, window=0.03)
+    return t_end - start
+
+
 def snap(a: Analysis, t: float, to: str = "bar") -> float:
     """Move a time to the nearest bar line or beat (then onto the drum hit)."""
     if to == "none":
@@ -60,25 +69,69 @@ def _blend(xa: np.ndarray, xb: np.ndarray, cut: int, sr: int, mode: str) -> np.n
     return ha * fout + hb * fin + la * g_out + lb * g_in
 
 
+def _overlay(xa: np.ndarray, xb: np.ndarray, sr: int, hold: float) -> np.ndarray:
+    """Old part's ending plays on top of the new part's start.
+
+    The new part comes in at full volume right away; the old part keeps playing
+    (full volume for `hold` of the window, then fades). The old part's bass drops
+    out when the new part starts, so the low end stays clean.
+    """
+    from scipy.signal import butter, sosfiltfilt
+    L = xa.shape[1]
+    x = np.linspace(0, 1, L, dtype=np.float32)
+    fade = np.where(x < hold, 1.0, np.cos(np.pi / 2 * (x - hold) / max(1 - hold, 1e-6)) ** 2)
+    sos = butter(4, 150, "lowpass", fs=sr, output="sos")
+    la = sosfiltfilt(sos, xa, axis=1)
+    ramp = min(L, int(0.04 * sr))
+    bass = np.zeros(L, np.float32)
+    bass[:ramp] = np.cos(np.linspace(0, np.pi / 2, ramp)) ** 2
+    b_in = np.ones(L, np.float32)
+    b_in[:int(0.005 * sr)] = np.linspace(0, 1, int(0.005 * sr))
+    return (xa - la) * fade + la * bass + xb * b_in
+
+
+def _limit(x: np.ndarray, sr: int, ceiling: float = 0.98) -> np.ndarray:
+    """Simple look-ahead peak limiter, so overlaps don't clip."""
+    from scipy.ndimage import maximum_filter1d, minimum_filter1d, uniform_filter1d
+    peak = np.abs(x).max(axis=0)
+    if peak.max() <= ceiling:
+        return x
+    w = max(1, int(0.005 * sr))
+    need = np.minimum(1.0, ceiling / np.maximum(peak, 1e-9))
+    # min over +-w then average over +-w: smooth, and never above what each sample needs
+    gain = uniform_filter1d(minimum_filter1d(need, 2 * w + 1), 2 * w + 1)
+    return (x * gain).astype(np.float32)
+
+
 def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural_end: bool,
-           xfade_s: float, fade_out_s: float, blend: str = "crossfade",
-           position: str = "before") -> np.ndarray:
+           xfade_s: float | list[float], fade_out_s: float, blend: str = "crossfade",
+           position: str = "before", hold: float = 0.5) -> np.ndarray:
     """Join parts. position: where the blend sits relative to the cut —
     'before' (new part's downbeat hits at full volume), 'center', or 'after'
     (old part's tail, e.g. a held vocal, rings over the new part's start)."""
-    L = max(1, int(xfade_s * sr))
-    f = {"before": 1.0, "center": 0.5, "after": 0.0}[position]
-    pre, post = int(round(f * L)), L - int(round(f * L))
     n = len(times)
+    Ls = [max(1, int(x * sr)) for x in (xfade_s if isinstance(xfade_s, list) else [xfade_s] * n)]
+    if blend == "overlay":       # new part starts under the old part's last L samples
+        position = "before"
+    f = {"before": 1.0, "center": 0.5, "after": 0.0}[position]
     pieces = []
     for idx, (t0, t1) in enumerate(times):
+        L = Ls[min(idx, len(Ls) - 1)]
+        pre, post = int(round(f * L)), L - int(round(f * L))
+        prev_L = Ls[idx - 1] if idx > 0 else 0
+        prev_post = prev_L - int(round(f * prev_L))
         s, e = int(t0 * sr), int(t1 * sr)
-        a = s + (post if idx > 0 else 0)
+        a = s + (prev_post if idx > 0 else 0) + (prev_L if idx > 0 and blend == "overlay" else 0)
         b = e - (pre if idx < n - 1 else 0)
         pieces.append(audio[:, a:b])
         if idx < n - 1:
             nb = int(times[idx + 1][0] * sr)
             xa = audio[:, e - pre:e + post]
+            if blend == "overlay":
+                xb = audio[:, nb:nb + L]
+                m = min(xa.shape[1], xb.shape[1])
+                pieces.append(_overlay(xa[:, :m], xb[:, :m], sr, hold))
+                continue
             xb = audio[:, nb - pre:nb + post]
             m = min(xa.shape[1], xb.shape[1])
             pieces.append(_blend(xa[:, :m], xb[:, :m], pre, sr, blend))
@@ -93,4 +146,4 @@ def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural
     else:
         r = min(int(0.01 * sr), out.shape[1])
         out[:, -r:] *= np.linspace(1, 0, r, dtype=np.float32)
-    return out
+    return _limit(out, sr)

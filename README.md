@@ -46,7 +46,8 @@ Edit (3 parts):
 | `-p, --parts A-B,C-D` | – | Choose the parts yourself instead of `-l`. Edges snap to bars. |
 | `--snap bar\|beat\|none` | `bar` | Snapping for `--parts` edges. |
 | `--xfade BEATS` | `0.5` | Crossfade length in beats (4 = one bar in 4/4). |
-| `--blend crossfade\|eq` | `crossfade` | `eq` is a DJ-style bass swap: mids and highs blend, and the bass hands over on the downbeat. Use it for long blends. |
+| `--blend crossfade\|eq\|overlay` | `crossfade` | `eq` is a DJ-style bass swap: mids and highs blend, and the bass hands over on the downbeat. `overlay` starts the next part at full volume underneath the end of the previous one, and `--xfade` sets the overlap. |
+| `--hold 0-1` | `0.5` | For overlay: the share of the overlap where the previous part stays at full volume before fading. |
 | `--blend-pos before\|center\|after` | `before` | Where the blend sits: `before` lets the new part's downbeat hit at full volume, and `after` lets the old part's tail (e.g. a held vocal) carry over. |
 | `--fade-out SEC` | `4` | Fade-out length when the real ending isn't used. |
 | `--min-segment BARS` | `4` | Shortest piece between two cuts. |
