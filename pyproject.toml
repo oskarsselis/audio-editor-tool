@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "librosa>=1.0.0",
     "numpy>=2.5.4",
+    "scipy>=1.18.1",
     "soundfile>=0.14.0",
 ]
 

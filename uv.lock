@@ -714,6 +714,7 @@ source = { editable = "." }
 dependencies = [
     { name = "librosa" },
     { name = "numpy" },
+    { name = "scipy" },
     { name = "soundfile" },
 ]
 
@@ -721,6 +722,7 @@ dependencies = [
 requires-dist = [
     { name = "librosa", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=2.5.4" },
+    { name = "scipy", specifier = ">=1.18.1" },
     { name = "soundfile", specifier = ">=0.14.0" },
 ]
 

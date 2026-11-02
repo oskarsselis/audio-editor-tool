@@ -43,7 +43,11 @@ Edit (3 parts):
 | `-o, --output` | `<input>_short.<ext>` | Output file. |
 | `--start intro\|any` | `intro` | `any` lets the edit start later, at a section start. |
 | `--end auto\|outro\|fade` | `auto` | Keep the real ending, fade out, or let the tool choose. |
-| `--xfade BEATS` | `0.5` | Crossfade length in beats. |
+| `-p, --parts A-B,C-D` | – | Choose the parts yourself instead of `-l`. Edges snap to bars. |
+| `--snap bar\|beat\|none` | `bar` | Snapping for `--parts` edges. |
+| `--xfade BEATS` | `0.5` | Crossfade length in beats (4 = one bar in 4/4). |
+| `--blend crossfade\|eq` | `crossfade` | `eq` is a DJ-style bass swap: mids and highs blend, and the bass hands over on the downbeat. Use it for long blends. |
+| `--blend-pos before\|center\|after` | `before` | Where the blend sits: `before` lets the new part's downbeat hit at full volume, and `after` lets the old part's tail (e.g. a held vocal) carry over. |
 | `--fade-out SEC` | `4` | Fade-out length when the real ending isn't used. |
 | `--min-segment BARS` | `4` | Shortest piece between two cuts. |
 | `--tolerance SEC` | `4` | How far the length may drift from the target. |

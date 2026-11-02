@@ -32,32 +32,65 @@ def segment_times(a: Analysis, p: Plan) -> list[tuple[float, float]]:
     return times
 
 
-def render(audio: np.ndarray, sr: int, a: Analysis, p: Plan,
-           xfade_s: float, fade_out_s: float) -> tuple[np.ndarray, list[tuple[float, float]]]:
-    times = segment_times(a, p)
-    xf = max(1, int(xfade_s * sr))
-    t = np.linspace(0, np.pi / 2, xf, dtype=np.float32)
-    fade_in, fade_out = np.sin(t), np.cos(t)
+def snap(a: Analysis, t: float, to: str = "bar") -> float:
+    """Move a time to the nearest bar line or beat (then onto the drum hit)."""
+    if to == "none":
+        return t
+    grid = np.r_[a.bar_starts, a.bar_ends[-1]] if to == "bar" else a.beats
+    return _refine(a, float(grid[np.argmin(np.abs(grid - t))]))
 
-    s0, e0 = (int(x * sr) for x in times[0])
-    out = audio[:, s0:e0].copy()
-    if s0 > 0:                                   # started mid-song: avoid a click
-        ramp = min(int(0.01 * sr), out.shape[1])
-        out[:, :ramp] *= np.linspace(0, 1, ramp, dtype=np.float32)
 
-    for t0, t1 in times[1:]:
+def _blend(xa: np.ndarray, xb: np.ndarray, cut: int, sr: int, mode: str) -> np.ndarray:
+    """Mix outgoing xa into incoming xb. `cut` = sample where xb's downbeat lands."""
+    L = xa.shape[1]
+    t = np.linspace(0, np.pi / 2, L, dtype=np.float32)
+    fin, fout = np.sin(t), np.cos(t)
+    if mode == "crossfade":
+        return xa * fout + xb * fin
+    # eq: bass swap. Mids/highs crossfade over the whole window; the bass of the
+    # outgoing part stays until the downbeat and then hands over quickly, so two
+    # bass lines never stack up.
+    from scipy.signal import butter, sosfiltfilt
+    sos = butter(4, 150, "lowpass", fs=sr, output="sos")
+    la, lb = sosfiltfilt(sos, xa, axis=1), sosfiltfilt(sos, xb, axis=1)
+    ha, hb = xa - la, xb - lb
+    ramp = max(1, int(0.04 * sr))
+    g = np.clip((np.arange(L) - (cut - ramp // 2)) / ramp, 0, 1).astype(np.float32)
+    g_in, g_out = np.sin(g * np.pi / 2), np.cos(g * np.pi / 2)
+    return ha * fout + hb * fin + la * g_out + lb * g_in
+
+
+def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural_end: bool,
+           xfade_s: float, fade_out_s: float, blend: str = "crossfade",
+           position: str = "before") -> np.ndarray:
+    """Join parts. position: where the blend sits relative to the cut —
+    'before' (new part's downbeat hits at full volume), 'center', or 'after'
+    (old part's tail, e.g. a held vocal, rings over the new part's start)."""
+    L = max(1, int(xfade_s * sr))
+    f = {"before": 1.0, "center": 0.5, "after": 0.0}[position]
+    pre, post = int(round(f * L)), L - int(round(f * L))
+    n = len(times)
+    pieces = []
+    for idx, (t0, t1) in enumerate(times):
         s, e = int(t0 * sr), int(t1 * sr)
-        L = min(xf, s, out.shape[1])
-        # Crossfade over the moments *before* the downbeat, so the new section's
-        # downbeat hits at full volume.
-        out[:, -L:] = out[:, -L:] * fade_out[-L:] + audio[:, s - L:s] * fade_in[-L:]
-        out = np.concatenate([out, audio[:, s:e]], axis=1)
+        a = s + (post if idx > 0 else 0)
+        b = e - (pre if idx < n - 1 else 0)
+        pieces.append(audio[:, a:b])
+        if idx < n - 1:
+            nb = int(times[idx + 1][0] * sr)
+            xa = audio[:, e - pre:e + post]
+            xb = audio[:, nb - pre:nb + post]
+            m = min(xa.shape[1], xb.shape[1])
+            pieces.append(_blend(xa[:, :m], xb[:, :m], pre, sr, blend))
+    out = np.concatenate(pieces, axis=1).astype(np.float32)
 
-    if not p.natural_end:
-        L = min(int(fade_out_s * sr), out.shape[1])
-        curve = np.cos(np.linspace(0, np.pi / 2, L, dtype=np.float32)) ** 2
-        out[:, -L:] *= curve
+    if times[0][0] > 0:                          # started mid-song: avoid a click
+        r = min(int(0.01 * sr), out.shape[1])
+        out[:, :r] *= np.linspace(0, 1, r, dtype=np.float32)
+    if not natural_end:
+        r = min(int(fade_out_s * sr), out.shape[1])
+        out[:, -r:] *= np.cos(np.linspace(0, np.pi / 2, r, dtype=np.float32)) ** 2
     else:
-        L = min(int(0.01 * sr), out.shape[1])
-        out[:, -L:] *= np.linspace(1, 0, L, dtype=np.float32)
-    return out, times
+        r = min(int(0.01 * sr), out.shape[1])
+        out[:, -r:] *= np.linspace(1, 0, r, dtype=np.float32)
+    return out
