@@ -119,21 +119,29 @@ class Transition:
 def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural_end: bool,
            xfade_s: float | list[float], fade_out_s: float, blend: str = "crossfade",
            position: str = "before", hold: float = 0.5,
-           fx: list[str] | None = None, beat_s: float | None = None) -> np.ndarray:
+           fx: list[str] | None = None, beat_s: float | None = None, fade_in_s: float = 0.0,
+           gains_db: list[float] | None = None, master_db: float = 0.0) -> np.ndarray:
     """Same settings for every join (CLI). See render_parts for per-join settings."""
     n = len(times)
     xs = xfade_s if isinstance(xfade_s, list) else [xfade_s] * n
     trans = [Transition(blend, xs[i], position, hold, list(fx or [])) for i in range(n - 1)]
-    out, _ = render_parts(audio, sr, times, trans, natural_end, fade_out_s, beat_s)
+    out, _ = render_parts(audio, sr, times, trans, natural_end, fade_out_s, beat_s,
+                          fade_in_s=fade_in_s, gains_db=gains_db, master_db=master_db)
     return out
 
 
 def render_parts(audio: np.ndarray, sr: int, times: list[tuple[float, float]],
                  transitions: list[Transition], natural_end: bool, fade_out_s: float,
-                 beat_s: float | None = None, fade_in_s: float = 0.0
+                 beat_s: float | None = None, fade_in_s: float = 0.0,
+                 gains_db: list[float] | None = None, master_db: float = 0.0
                  ) -> tuple[np.ndarray, list[float]]:
-    """Join parts with per-join settings. Returns (audio, cut times in the output in s)."""
+    """Join parts with per-join settings. Returns (audio, cut times in the output in s).
+
+    gains_db: volume change per part in dB (0 = unchanged); master_db: whole output.
+    Gain changes between parts happen inside the blend, so they are smooth.
+    """
     n = len(times)
+    g = [10 ** (db / 20) for db in (gains_db or [])] + [1.0] * n
     pieces: list[np.ndarray] = []
     joins = []                     # (cut in output, outgoing end, incoming start) in samples
     length = 0
@@ -141,7 +149,7 @@ def render_parts(audio: np.ndarray, sr: int, times: list[tuple[float, float]],
     for idx, (t0, t1) in enumerate(times):
         s, e = int(t0 * sr), int(t1 * sr)
         if idx == n - 1:
-            pieces.append(audio[:, s + skip_in:e])
+            pieces.append(audio[:, s + skip_in:e] * g[idx])
             length += pieces[-1].shape[1]
             break
         tr = transitions[idx]
@@ -152,18 +160,18 @@ def render_parts(audio: np.ndarray, sr: int, times: list[tuple[float, float]],
         else:
             f = {"before": 1.0, "center": 0.5, "after": 0.0}[tr.position]
             pre, post = int(round(f * L)), L - int(round(f * L))
-        body = audio[:, s + skip_in:max(s + skip_in, e - pre)]
+        body = audio[:, s + skip_in:max(s + skip_in, e - pre)] * g[idx]
         pieces.append(body)
         length += body.shape[1]
-        xa = audio[:, e - pre:e + post]
+        xa = audio[:, e - pre:e + post] * g[idx]
         if tr.blend == "overlay":
-            xb = audio[:, nb:nb + L]
+            xb = audio[:, nb:nb + L] * g[idx + 1]
             m = min(xa.shape[1], xb.shape[1])
             mix = _overlay(xa[:, :m], xb[:, :m], sr, tr.hold)
             joins.append((length, e, nb, tr))
             skip_in = m
         else:
-            xb = audio[:, max(0, nb - pre):nb + post]
+            xb = audio[:, max(0, nb - pre):nb + post] * g[idx + 1]
             m = min(xa.shape[1], xb.shape[1])
             mix = _blend(xa[:, :m], xb[:, :m], min(pre, m), sr, tr.blend)
             joins.append((length + pre, e, nb, tr))
@@ -171,6 +179,8 @@ def render_parts(audio: np.ndarray, sr: int, times: list[tuple[float, float]],
         pieces.append(mix)
         length += mix.shape[1]
     out = np.concatenate(pieces, axis=1).astype(np.float32)
+    if master_db:
+        out *= np.float32(10 ** (master_db / 20))
     if any(j[3].fx for j in joins):
         from .fx import apply
         out = apply(out, audio, sr, joins, beat_s or 0.5)

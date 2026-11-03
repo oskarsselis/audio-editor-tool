@@ -73,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --parts: snap part edges to the nearest bar (default), beat, or not at all")
     ap.add_argument("--fade-out", type=float, default=4.0, metavar="SEC",
                     help="fade-out length when not using the real ending (default 4)")
+    ap.add_argument("--fade-in", type=float, default=0.0, metavar="SEC",
+                    help="fade in the start of the output (default 0 = no fade)")
+    ap.add_argument("--gains", metavar="DB,DB,...",
+                    help="volume change per part in dB, in play order, e.g. 0,-3,2")
+    ap.add_argument("--master-gain", type=float, default=0.0, metavar="DB",
+                    help="volume change for the whole output in dB (a limiter prevents clipping)")
     ap.add_argument("--min-segment", type=int, default=4, metavar="BARS",
                     help="shortest piece kept between cuts (default 4 bars)")
     ap.add_argument("--tolerance", type=float, default=4.0, metavar="SEC",
@@ -141,6 +147,10 @@ def finish(args, audio, sr, a, beat, times, joins, natural_end) -> int:
         xfades = [overlap_len(a, t1, args.xfade) for _, t1 in times]
         xfade_s = xfades[0]
     fx = [f.strip() for f in args.fx.split(",") if f.strip()]
+    try:
+        gains = [float(x) for x in args.gains.split(",")] if args.gains else None
+    except ValueError:
+        raise SystemExit(f"--gains must be numbers in dB, e.g. 0,-3,2 (got '{args.gains}')")
     from .fx import FX
     for f in fx:
         if f not in FX:
@@ -148,7 +158,8 @@ def finish(args, audio, sr, a, beat, times, joins, natural_end) -> int:
     near = a.beats[np.abs(a.beats - times[0][1]) < 10]
     beat_s = float(np.polyfit(np.arange(len(near)), near, 1)[0]) if len(near) > 4 else beat
     out = render(audio, sr, times, natural_end, xfades, args.fade_out,
-                 blend=args.blend, position=args.blend_pos, hold=args.hold, fx=fx, beat_s=beat_s)
+                 blend=args.blend, position=args.blend_pos, hold=args.hold, fx=fx, beat_s=beat_s,
+                 fade_in_s=args.fade_in, gains_db=gains, master_db=args.master_gain)
 
     in_path = Path(args.input)
     out_path = Path(args.output) if args.output else in_path.with_name(
@@ -165,7 +176,11 @@ def finish(args, audio, sr, a, beat, times, joins, natural_end) -> int:
         where = f"hold {args.hold:g}" if args.blend == "overlay" else f"{args.blend_pos} the cut"
         print(f"  blend: {args.blend}, {args.xfade:g} beats ({xfade_s:.2f}s), {where}"
               + (f", fx: {', '.join(fx)}" if fx else ""))
+    if args.fade_in:
+        print(f"  start: {args.fade_in:g}s fade-in")
     print(f"  ending: {'original outro' if natural_end else f'{args.fade_out:g}s fade-out'}")
+    if gains or args.master_gain:
+        print(f"  volume: parts {gains or 'unchanged'} dB, master {args.master_gain:+g} dB")
     target = f", target {fmt(args.length)}" if args.length else ""
     print(f"\nSaved {out_path}  ({fmt(out.shape[1] / sr)}{target})")
 

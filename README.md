@@ -18,6 +18,47 @@ cd audio-editor-tool
 uv sync
 ```
 
+## Windows setup
+
+One-time setup. Open **PowerShell** (Start menu → type `PowerShell`) and run these commands one at a time.
+
+1. Install uv (it also installs Python for you):
+
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+2. Install Git and ffmpeg (ffmpeg is needed for MP3):
+
+   ```powershell
+   winget install -e --id Git.Git
+   ```
+
+   ```powershell
+   winget install -e --id Gyan.FFmpeg
+   ```
+
+3. **Close PowerShell and open a new one** so the new programs are found. Check that they work: `uv --version`, `git --version` and `ffmpeg -version` should each print a version.
+
+4. Download the project and install its dependencies:
+
+   ```powershell
+   cd $HOME\Documents
+   git clone https://github.com/oskarsselis/audio-editor-tool.git
+   cd audio-editor-tool
+   uv sync
+   ```
+
+**Start the editor:** double-click **`Start-Audio-Editor.bat`** in the `Documents\audio-editor-tool` folder, or run `uv run audio-editor-tool-gui` in PowerShell from that folder. A window opens in Microsoft Edge app mode (or Chrome). Keep the black console window open while you work; close it to quit.
+
+**Update to the latest version:** run `git pull` and then `uv sync` in the project folder.
+
+**Troubleshooting:**
+- *"uv / git / ffmpeg is not recognized"*: open a new PowerShell window after installing. If it still fails, restart Windows.
+- *`winget` not found*: install **App Installer** from the Microsoft Store.
+- *Port already in use*: an editor is already running. Close its console window, or start a second one with `uv run audio-editor-tool-gui --port 8766`.
+- *Antivirus warning about uv*: allow it. uv is the open-source Python tool from Astral.
+
 ## Editor window
 
 ```bash
@@ -42,7 +83,10 @@ This opens the editor in its own window. It uses Chrome/Edge app mode if one is 
 | **Length** | Blend length in beats (4 = one bar). |
 | **Effects** | **Riser**: a noise sweep that builds up. **Swell**: reverse reverb into the next clip. **Echo**: echoes of the last beat. **Sweep**: drains the bass before the cut. Combine them freely. **FX vol** sets their volume. |
 | **Auto-pick** | Chooses clips for a target length. Clips already in the list are kept. |
-| **Ending / Fade in** | Fade out (any length) or keep the song's real ending. Optional fade in. |
+| **Vol (per clip)** | Volume of each clip in dB (0 = unchanged, negative = quieter, positive = louder). Changes blend smoothly at the transitions. |
+| **Master volume** | Volume of the whole output in dB. A limiter prevents clipping when boosting. |
+| **Start** | **Direct**, or **Fade in** over the seconds you set. |
+| **Ending** | Fade out over the seconds you set, or keep the song's real ending. |
 
 ## Command line
 
@@ -56,11 +100,14 @@ uv run audio-editor-tool song.mp3 -l 2:00 -k 1:05-1:40 -s 2:10-2:30 -o edit.mp3
 # Your own parts, with echo + swell at the joins and a fade-out
 uv run audio-editor-tool song.mp3 -p 1:41-1:58,2:25-2:44 --fx echo,swell --end fade
 
+# Same, with clip 2 at -3 dB, whole output -1 dB and a 2 s fade-in
+uv run audio-editor-tool song.mp3 -p 1:41-1:58,2:25-2:44 --gains 0,-3 --master-gain -1 --fade-in 2 --fx echo,swell --end fade
+
 # Show the section map
 uv run audio-editor-tool song.mp3 --analyze
 ```
 
-Run `uv run audio-editor-tool --help` for all options: `--blend crossfade|eq|overlay`, `--xfade BEATS`, `--fx riser,swell,echo,sweep`, `--start`, `--end`, `--snap`, `--fade-out`, `--tolerance`, `--plan-json` and more.
+Run `uv run audio-editor-tool --help` for all options: `--blend crossfade|eq|overlay`, `--xfade BEATS`, `--fx riser,swell,echo,sweep`, `--gains 0,-3,2` (dB per part), `--master-gain DB`, `--fade-in SEC`, `--start`, `--end`, `--snap`, `--fade-out`, `--tolerance`, `--plan-json` and more.
 
 ## How it works
 
@@ -81,6 +128,7 @@ src/audio_editor_tool/
   web/index.html  editor UI
   cli.py        command line
 examples/make_demo_song.py   synthetic test song
+Start-Audio-Editor.bat       Windows double-click launcher
 tests/                       pytest suite (uv run pytest)
 ```
 

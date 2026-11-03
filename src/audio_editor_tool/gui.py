@@ -117,7 +117,9 @@ def render(req: dict) -> dict:
     out, cuts = render_parts(audio, sr, times, trans, natural_end=natural,
                              fade_out_s=float(req.get("fade_out", 4.0)),
                              beat_s=_local_beat(a, times[0][1]),
-                             fade_in_s=float(req.get("fade_in", 0.0)))
+                             fade_in_s=float(req.get("fade_in", 0.0)),
+                             gains_db=[float(x) for x in req.get("gains", [])],
+                             master_db=float(req.get("master_db", 0.0)))
     rid = uuid.uuid4().hex[:10]
     wav = WORKDIR / f"result_{rid}.wav"
     audio_io.save(wav, out, sr)

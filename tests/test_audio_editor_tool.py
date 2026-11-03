@@ -98,6 +98,7 @@ def test_gui_server_round_trip(demo):
         body = json.dumps({"id": song["id"], "clips": [[7.9, 23.6], [55.1, 70.8], [86.6, 102.3]],
                            "joins": [{"blend": "crossfade", "beats": 0.5, "fx": ["echo", "swell"]},
                                      {"blend": "eq", "beats": 4, "fx": ["riser"]}],
+                           "gains": [0, -3, 2], "master_db": -1, "fade_in": 1,
                            "ending": "fade"}).encode()
         res = post("/api/render", body, {"Content-Type": "application/json"})
         assert len(res["cuts"]) == 2 and res["duration"] > 40
@@ -105,3 +106,41 @@ def test_gui_server_round_trip(demo):
         assert wav[:4] == b"RIFF"
     finally:
         server.shutdown()
+
+
+def test_clip_and_master_volume_and_fade_in(demo):
+    _, audio, sr, a = demo
+    times = [(23.6, 39.3), (55.1, 70.8)]
+    trans = [Transition()]
+
+    def run(**kw):
+        out, cuts = render_parts(audio, sr, times, trans, natural_end=False, fade_out_s=2,
+                                 beat_s=a.bar_len / 4, **kw)
+        return out, cuts[0]
+
+    def rms_db(x):
+        return 20 * np.log10(np.sqrt(np.mean(x ** 2)))
+
+    base, cut = run()
+    quiet, _ = run(gains_db=[-6, 0])
+    mid1 = slice(int(2 * sr), int((cut - 1) * sr))          # inside clip 1
+    mid2 = slice(int((cut + 1) * sr), int((cut + 8) * sr))  # inside clip 2
+    assert abs((rms_db(quiet[:, mid1]) - rms_db(base[:, mid1])) + 6) < 0.3
+    assert abs(rms_db(quiet[:, mid2]) - rms_db(base[:, mid2])) < 0.3
+
+    softer, _ = run(master_db=-3)
+    assert abs((rms_db(softer[:, mid1]) - rms_db(base[:, mid1])) + 3) < 0.3
+
+    faded, _ = run(fade_in_s=2)
+    assert np.abs(faded[:, :50]).max() < 0.01                      # silent at the start
+    assert np.allclose(faded[:, int(3 * sr):int(4 * sr)], base[:, int(3 * sr):int(4 * sr)])
+
+
+def test_cli_gain_and_fade_in(demo, tmp_path):
+    path, *_ = demo
+    out = tmp_path / "vol.wav"
+    assert cli_main([str(path), "-p", "0:23.6-0:39.3,1:26.6-1:42.3", "--gains", "0,-3",
+                     "--master-gain", "-1", "--fade-in", "1.5", "--end", "fade",
+                     "-o", str(out)]) == 0
+    audio, sr = audio_io.load(out)
+    assert np.abs(audio[:, :50]).max() < 0.01

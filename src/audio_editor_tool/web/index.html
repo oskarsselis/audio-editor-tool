@@ -51,6 +51,8 @@
            font-weight: 700; color: #0f1115; }
   .clip .times { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .clip .times input { width: 78px; }
+  .clip .vol { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; }
+  .clip .vol input { width: 64px; }
   .clip .len { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 4px; }
   .clip .btns { display: flex; gap: 4px; }
   .join { margin: 4px 0 4px 36px; padding: 8px 10px; border-left: 2px dashed var(--line);
@@ -125,12 +127,19 @@
       <div class="hint" style="margin:-4px 0 6px">Existing clips are treated as parts that must stay in.</div>
       <div class="divider"></div>
       <div class="row">
-        <label>Ending</label>
+        <label>Ending&nbsp;</label>
         <div class="seg" id="endSeg"><button data-v="fade" class="on">Fade out</button><button data-v="natural">Original ending</button></div>
         <label>fade</label><input type="number" id="fadeOut" value="4" min="0.5" step="0.5"><span class="hint">s</span>
       </div>
       <div class="row">
-        <label>Fade in</label><input type="number" id="fadeIn" value="0" min="0" step="0.5"><span class="hint">s</span>
+        <label>Start</label>
+        <div class="seg" id="startSeg"><button data-v="cut" class="on">Direct</button><button data-v="fade">Fade in</button></div>
+        <label>fade</label><input type="number" id="fadeIn" value="2" min="0.1" step="0.5"><span class="hint">s</span>
+      </div>
+      <div class="row">
+        <label title="Volume of the whole output. A limiter prevents clipping when boosting.">Master volume</label>
+        <input type="range" id="masterRange" min="-24" max="12" step="0.5" value="0" style="width:150px">
+        <input type="number" id="masterDb" min="-60" max="24" step="0.5" value="0"><span class="hint">dB</span>
       </div>
       <div class="row stat">Estimated length: <b id="estLen">–</b></div>
       <div class="row">
@@ -169,7 +178,10 @@ const PRESETS = {
   dj:      {label: "DJ blend (bass swap)", blend: "eq", beats: 8, fx: []},
   overlay: {label: "Overlay (start on top)", blend: "overlay", beats: 4, fx: []},
 };
-const S = { song: null, clips: [], joins: [], sel: -1, snap: "bar", ending: "fade", result: null };
+// clip = [start, end, volume dB]
+const S = { song: null, clips: [], joins: [], sel: -1, snap: "bar", ending: "fade", start: "cut", master: 0, result: null };
+const gainOf = c => +(c[2] || 0);
+const fmtDb = v => (v > 0 ? "+" : "") + (+v).toFixed(1);
 
 function fmt(t) { if (!isFinite(t)) return "–"; const m = Math.floor(t / 60), s = t - 60 * m;
   return `${m}:${s.toFixed(1).padStart(4, "0")}`; }
@@ -239,8 +251,10 @@ function drawSource() {
     const x = X(cl[0]), w = X(cl[1]) - x, col = COLORS[i % COLORS.length];
     g.fillStyle = col; g.fillRect(x, waveTop, 2, waveH); g.fillRect(x + w - 2, waveTop, 2, waveH);
     g.fillRect(x, waveTop, w, 3);
-    g.fillRect(x + 2, waveTop + 3, 20, 18);
-    g.font = "700 12px system-ui"; g.fillStyle = "#0f1115"; g.fillText(String(i + 1), x + 8, waveTop + 16);
+    g.font = "700 12px system-ui";
+    const label = String(i + 1) + (gainOf(cl) ? `  ${fmtDb(gainOf(cl))} dB` : "");
+    g.fillRect(x + 2, waveTop + 3, g.measureText(label).width + 12, 18);
+    g.fillStyle = "#0f1115"; g.fillText(label, x + 8, waveTop + 16);
   });
   // ruler
   g.fillStyle = "#6b7387"; g.font = "11px system-ui";
@@ -296,7 +310,7 @@ window.addEventListener("mousemove", e => {
     drag.moved = drag.moved || Math.abs(t - drag.t0) * pxPerSec() > 4;
     if (!drag.moved) return;
     let a = snapT(t - drag.off); a = Math.max(0, Math.min(S.song.duration - drag.len, a));
-    S.clips[drag.i] = [a, a + drag.len];
+    S.clips[drag.i][0] = a; S.clips[drag.i][1] = a + drag.len;
   }
   render();
 });
@@ -334,12 +348,16 @@ function renderList() {
     d.className = "clip" + (i === S.sel ? " sel" : "");
     d.innerHTML = `<div class="badge" style="background:${col}">${i + 1}</div>
       <div class="times"><input type="text" value="${fmt(c[0])}" data-k="0" title="Start (m:ss.s)"> →
-        <input type="text" value="${fmt(c[1])}" data-k="1" title="End (m:ss.s)"><span class="len">${(c[1] - c[0]).toFixed(1)} s</span></div>
+        <input type="text" value="${fmt(c[1])}" data-k="1" title="End (m:ss.s)"><span class="len">${(c[1] - c[0]).toFixed(1)} s</span>
+        <label class="vol" title="Clip volume in dB (0 = unchanged)">Vol <input type="number" data-k="gain" step="0.5" min="-60" max="24" value="${gainOf(c)}"> dB</label></div>
       <div class="btns"><button class="icon" data-a="play" title="Play this clip">▶</button>
         <button class="icon" data-a="up" title="Move earlier">↑</button><button class="icon" data-a="down" title="Move later">↓</button>
         <button class="icon" data-a="del" title="Remove">✕</button></div>`;
     d.addEventListener("mousedown", ev => { if (ev.target.tagName !== "INPUT" && ev.target.tagName !== "BUTTON") { S.sel = i; render(); } });
-    d.querySelectorAll("input").forEach(inp => inp.addEventListener("change", () => {
+    d.querySelector("[data-k=gain]").addEventListener("change", ev => {
+      const v = parseFloat(ev.target.value); c[2] = isNaN(v) ? 0 : Math.max(-60, Math.min(24, v)); render();
+    });
+    d.querySelectorAll("input[data-k='0'], input[data-k='1']").forEach(inp => inp.addEventListener("change", () => {
       const v = parseT(inp.value); if (isNaN(v)) return render();
       c[+inp.dataset.k] = Math.max(0, Math.min(S.song.duration, v));
       if (c[1] <= c[0] + 0.2) c[1] = Math.min(S.song.duration, c[0] + 0.2); render();
@@ -403,7 +421,11 @@ function segBind(id, key, after) {
     $(id).querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); S[key] = b.dataset.v; after && after();
   });
 }
-segBind("#snapSeg", "snap"); segBind("#endSeg", "ending");
+segBind("#snapSeg", "snap"); segBind("#endSeg", "ending"); segBind("#startSeg", "start");
+function setMaster(v) { v = Math.max(-60, Math.min(24, isNaN(v) ? 0 : v)); S.master = v;
+  $("#masterDb").value = v; $("#masterRange").value = Math.max(-24, Math.min(12, v)); }
+$("#masterRange").oninput = e => setMaster(+e.target.value);
+$("#masterDb").onchange = e => setMaster(parseFloat(e.target.value));
 
 async function openFile(f) {
   if (!f) return;
@@ -433,9 +455,15 @@ $("#autoBtn").onclick = async () => {
   if (!S.song) return toast("Open a song first.");
   busy("Choosing clips…");
   try {
-    const r = await api("/api/suggest", { id: S.song.id, length: +$("#target").value, keep: S.clips,
+    const r = await api("/api/suggest", { id: S.song.id, length: +$("#target").value, keep: S.clips.map(c => [c[0], c[1]]),
                                            start: S.clips.length ? "any" : "intro", end: "auto" });
-    S.clips = r.clips; S.joins = []; syncJoins(); S.sel = -1;
+    const old = S.clips;   // keep each kept clip's volume on the new clip that covers it
+    S.clips = r.clips.map(([a, b]) => {
+      let best = null, ov = 0;
+      for (const c of old) { const o = Math.min(b, c[1]) - Math.max(a, c[0]); if (o > ov) { ov = o; best = c; } }
+      return [a, b, best ? gainOf(best) : 0];
+    });
+    S.joins = []; syncJoins(); S.sel = -1;
     const endBtn = $("#endSeg").querySelector(`[data-v=${r.natural_end ? "natural" : "fade"}]`); endBtn.click();
     render();
   } catch (e) { toast(e.message); }
@@ -445,9 +473,11 @@ $("#autoBtn").onclick = async () => {
 $("#renderBtn").onclick = async () => {
   busy("Rendering preview…");
   try {
-    const r = await api("/api/render", { id: S.song.id, clips: S.clips, snap: S.snap,
+    const r = await api("/api/render", { id: S.song.id, clips: S.clips.map(c => [c[0], c[1]]),
+      gains: S.clips.map(gainOf), master_db: S.master, snap: S.snap,
       joins: S.joins.map(j => ({ blend: j.blend, beats: j.beats, fx: j.fx, fx_level: j.fx_level, position: "before", hold: 0.5 })),
-      ending: S.ending, fade_out: +$("#fadeOut").value, fade_in: +$("#fadeIn").value });
+      ending: S.ending, fade_out: +$("#fadeOut").value,
+      fade_in: S.start === "fade" ? +$("#fadeIn").value : 0 });
     S.result = r;
     const blob = await (await fetch(`/api/result/${r.rid}?format=wav`)).blob();
     $("#resAudio").src = URL.createObjectURL(blob);
