@@ -87,6 +87,9 @@
   #saveName { width: 170px; }
   #toast.ok { background: #183526; border-color: var(--good); }
   .addrow { display: flex; justify-content: center; margin-top: 10px; }
+  .wave-wrap { border-radius: 6px; outline: 1px solid transparent; outline-offset: 3px; }
+  .wave-wrap.active { outline-color: #3a4e85; }
+  header .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
   @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -95,6 +98,11 @@
   <h1>🎵 Audio Editor Tool</h1>
   <button class="primary" id="openBtn">Open audio…</button>
   <input type="file" id="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a" hidden>
+  <span class="sep"></span>
+  <button id="openProjBtn" title="Open a saved project (.aetproj)">Open project…</button>
+  <input type="file" id="projFile" accept=".aetproj" hidden>
+  <button id="saveProjBtn" title="Save the project (Ctrl+S)" disabled>Save project</button>
+  <button id="saveAsBtn" title="Save the project to a new file" disabled>Save as…</button>
   <div class="info" id="info">No song loaded</div>
   <label class="hint">Snap</label>
   <div class="seg" id="snapSeg">
@@ -106,7 +114,7 @@
   <section class="panel">
     <h2>Source <span class="grow"></span><span class="hint" style="text-transform:none;letter-spacing:0">
       Drag on the waveform to add a clip · drag a clip to move · drag its edges to resize · click to set the playhead · Del removes the selected clip</span></h2>
-    <div id="dropZone" class="drop">Drop an audio file here or click <b>Open audio…</b></div>
+    <div id="dropZone" class="drop">Drop an audio file or a project file here, or click <b>Open audio…</b></div>
     <div class="wave-wrap" id="srcWrap" style="display:none">
       <canvas id="srcCanvas"></canvas>
     </div>
@@ -158,7 +166,7 @@
       <div id="resultBox" style="display:none">
         <div class="divider"></div>
         <div class="row stat">Result: <b id="resLen"></b> <span id="resCuts"></span></div>
-        <div class="wave-wrap"><canvas id="resCanvas"></canvas></div>
+        <div class="wave-wrap" id="resWrap"><canvas id="resCanvas"></canvas></div>
         <div class="row" style="margin:8px 0 0; flex-wrap:nowrap">
           <audio id="resAudio" controls style="margin:0; flex:1"></audio>
           <button class="icon" id="resLoop" title="Repeat the output">⟳</button>
@@ -200,7 +208,8 @@ const PRESETS = {
   overlay: {label: "Overlay (start on top)", blend: "overlay", beats: 4, fx: []},
 };
 // clip = [start, end, volume dB]
-const S = { song: null, clips: [], joins: [], sel: -1, snap: "bar", master: 0, result: null, loop: null };
+const S = { song: null, clips: [], joins: [], sel: -1, snap: "bar", master: 0, result: null, loop: null,
+            active: "src", projectPath: "" };   // active: which player Space controls
 const gainOf = c => +(c[2] || 0);
 const fmtDb = v => (v > 0 ? "+" : "") + (+v).toFixed(1);
 
@@ -231,9 +240,8 @@ function snapT(t) {
 }
 
 // ---------- waveform drawing ----------
-function setupCanvas(c) { const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
-  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); return [g, r.width, r.height]; }
+// Each view draws its waveform once into a hidden canvas ("base") when something
+// changes. Every animation frame only copies the base and draws the playhead.
 function drawPeaks(g, peaks, x0, w, y0, h, color) {
   g.fillStyle = color; const n = peaks.length, mid = y0 + h / 2;
   for (let px = 0; px < w; px++) {
@@ -243,72 +251,80 @@ function drawPeaks(g, peaks, x0, w, y0, h, color) {
   }
 }
 const SEC_H = 22, RULER_H = 16;
-function drawSource() {
-  const c = $("#srcCanvas"); if (!S.song) return; const [g, W, H] = setupCanvas(c);
+function drawSourceBase(g, W, H) {
   const D = S.song.duration, X = t => t / D * W, waveTop = SEC_H + 4, waveH = H - waveTop - RULER_H;
-  g.clearRect(0, 0, W, H);
-  // sections
   const labels = [...new Set(S.song.sections.map(s => s.label))];
-  for (const s of S.song.sections) {
+  for (const s of S.song.sections) {                                   // sections
     const x = X(s.start), w = X(s.end) - x, ci = labels.indexOf(s.label) % SECTION_COLORS.length;
     g.fillStyle = SECTION_COLORS[ci]; g.fillRect(x + 1, 0, w - 2, SEC_H);
     g.fillStyle = "#cfd6e6"; g.font = "600 11px system-ui"; if (w > 18) g.fillText(s.label, x + 6, 15);
-    g.fillStyle = "rgba(255,255,255,.35)"; const ew = Math.max(0, w - 30) * s.energy;
-    if (w > 40) g.fillRect(x + 22, 9, ew, 3);
+    g.fillStyle = "rgba(255,255,255,.35)"; if (w > 40) g.fillRect(x + 22, 9, Math.max(0, w - 30) * s.energy, 3);
   }
-  // bar grid
-  g.fillStyle = "rgba(255,255,255,.05)";
+  g.fillStyle = "rgba(255,255,255,.05)";                               // bar grid
   for (const b of S.song.bars) g.fillRect(X(b), waveTop, 1, waveH);
-  // clips: tint, waveform (coloured inside clips), then borders and numbers on top
-  S.clips.forEach((cl, i) => {
-    const col = COLORS[i % COLORS.length];
-    g.fillStyle = col + (i === S.sel ? "38" : "1f"); g.fillRect(X(cl[0]), waveTop, X(cl[1]) - X(cl[0]), waveH);
+  S.clips.forEach((cl, i) => {                                         // clip tint
+    g.fillStyle = COLORS[i % COLORS.length] + (i === S.sel ? "38" : "1f");
+    g.fillRect(X(cl[0]), waveTop, X(cl[1]) - X(cl[0]), waveH);
   });
   drawPeaks(g, S.song.peaks, 0, W, waveTop, waveH, "#6f7f9e");
-  S.clips.forEach((cl, i) => {
+  S.clips.forEach((cl, i) => {                                         // clip waveform, edges, label
     const x = X(cl[0]), w = X(cl[1]) - x, col = COLORS[i % COLORS.length];
     g.save(); g.beginPath(); g.rect(x, waveTop, w, waveH); g.clip();
     drawPeaks(g, S.song.peaks, 0, W, waveTop, waveH, col); g.restore();
-  });
-  S.clips.forEach((cl, i) => {
-    const x = X(cl[0]), w = X(cl[1]) - x, col = COLORS[i % COLORS.length];
-    g.fillStyle = col; g.fillRect(x, waveTop, 2, waveH); g.fillRect(x + w - 2, waveTop, 2, waveH);
-    g.fillRect(x, waveTop, w, 3);
+    g.fillStyle = col; g.fillRect(x, waveTop, 2, waveH); g.fillRect(x + w - 2, waveTop, 2, waveH); g.fillRect(x, waveTop, w, 3);
     g.font = "700 12px system-ui";
     const label = String(i + 1) + (gainOf(cl) ? `  ${fmtDb(gainOf(cl))} dB` : "");
     g.fillRect(x + 2, waveTop + 3, g.measureText(label).width + 12, 18);
     g.fillStyle = "#0f1115"; g.fillText(label, x + 8, waveTop + 16);
   });
-  // ruler
-  g.fillStyle = "#6b7387"; g.font = "11px system-ui";
+  g.fillStyle = "#6b7387"; g.font = "11px system-ui";                  // ruler
   const step = D > 240 ? 30 : D > 90 ? 15 : 5;
   for (let t = 0; t < D; t += step) { const x = X(t); g.fillRect(x, H - RULER_H, 1, 4); g.fillText(fmt(t).replace(/\.\d$/, ""), x + 3, H - 3); }
-  // playhead
-  const a = $("#srcAudio"); g.fillStyle = "#fff"; g.fillRect(X(a.currentTime || 0), SEC_H, 1.5, H - SEC_H - RULER_H);
 }
-function drawResult() {
-  const r = S.result; if (!r) return; const c = $("#resCanvas"); const [g, W, H] = setupCanvas(c);
-  const D = r.duration, X = t => t / D * W; g.clearRect(0, 0, W, H);
-  const bounds = [0, ...r.cuts, D];
+function drawResultBase(g, W, H) {
+  const r = S.result, D = r.duration, X = t => t / D * W, bounds = [0, ...r.cuts, D];
   for (let i = 0; i < bounds.length - 1; i++) {
-    g.fillStyle = COLORS[i % COLORS.length] + "14"; g.fillRect(X(bounds[i]), 0, X(bounds[i + 1]) - X(bounds[i]), H);
-    g.fillStyle = COLORS[i % COLORS.length]; g.fillRect(X(bounds[i]), 0, X(bounds[i + 1]) - X(bounds[i]), 3);
-  }
-  for (let i = 0; i < bounds.length - 1; i++) {
-    const x = X(bounds[i]), w = X(bounds[i + 1]) - x;
+    const x = X(bounds[i]), w = X(bounds[i + 1]) - x, col = COLORS[i % COLORS.length];
+    g.fillStyle = col + "14"; g.fillRect(x, 0, w, H);
+    g.fillStyle = col; g.fillRect(x, 0, w, 3);
     g.save(); g.beginPath(); g.rect(x, 0, w, H); g.clip();
-    drawPeaks(g, r.peaks, 0, W, 6, H - 8, COLORS[i % COLORS.length]); g.restore();
+    drawPeaks(g, r.peaks, 0, W, 6, H - 8, col); g.restore();
   }
-  for (const t of r.cuts) { g.fillStyle = "#f0b429"; g.fillRect(X(t) - 1, 0, 2, H); }
-  const a = $("#resAudio"); g.fillStyle = "#fff"; g.fillRect(X(a.currentTime || 0), 0, 1.5, H);
+  g.fillStyle = "#f0b429"; for (const t of r.cuts) g.fillRect(X(t) - 1, 0, 2, H);
+}
+const views = {
+  src: { canvas: $("#srcCanvas"), audio: $("#srcAudio"), base: document.createElement("canvas"), dirty: true, lastX: -1,
+         dur: () => S.song && S.song.duration, draw: drawSourceBase, top: SEC_H, bottom: RULER_H },
+  res: { canvas: $("#resCanvas"), audio: $("#resAudio"), base: document.createElement("canvas"), dirty: true, lastX: -1,
+         dur: () => S.result && S.result.duration, draw: drawResultBase, top: 0, bottom: 0 },
+};
+function redraw(name) { if (name) views[name].dirty = true; else { views.src.dirty = true; views.res.dirty = true; } }
+function paint(v) {
+  const dur = v.dur(), r = v.canvas.getBoundingClientRect(); if (!dur || !r.width) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+  if (v.canvas.width !== W || v.canvas.height !== H) {
+    v.canvas.width = v.base.width = W; v.canvas.height = v.base.height = H; v.dirty = true;
+  }
+  const x = (v.audio.currentTime || 0) / dur * r.width;
+  if (!v.dirty && Math.abs(x - v.lastX) < 0.3) return;              // nothing changed
+  if (v.dirty) {
+    const b = v.base.getContext("2d"); b.setTransform(dpr, 0, 0, dpr, 0, 0); b.clearRect(0, 0, r.width, r.height);
+    v.draw(b, r.width, r.height); v.dirty = false;
+  }
+  const g = v.canvas.getContext("2d"); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H); g.drawImage(v.base, 0, 0);
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = "#fff"; g.fillRect(x, v.top, 1.5, r.height - v.top - v.bottom);
+  v.lastX = x;
 }
 
 // ---------- source canvas interaction ----------
 let drag = null;
 function tAt(e) { const r = $("#srcCanvas").getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * S.song.duration; }
 function pxPerSec() { return $("#srcCanvas").getBoundingClientRect().width / S.song.duration; }
+function setActive(name) {
+  S.active = name; $("#srcWrap").classList.toggle("active", name === "src"); $("#resWrap").classList.toggle("active", name === "res");
+}
 $("#srcCanvas").addEventListener("mousedown", e => {
-  if (!S.song) return; const t = tAt(e), tol = 7 / pxPerSec();
+  if (!S.song) return; setActive("src"); const t = tAt(e), tol = 7 / pxPerSec();
   for (let i = S.clips.length - 1; i >= 0; i--) {
     const [a, b] = S.clips[i];
     if (Math.abs(t - a) < tol) { drag = { mode: "l", i }; S.sel = i; return render(); }
@@ -324,9 +340,9 @@ window.addEventListener("mousemove", e => {
   if (!drag || !S.song) return; const t = tAt(e);
   if (drag.mode === "new") {
     if (Math.abs(e.clientX - drag.x0) < 5) return;
-    S.clips.push([snapT(Math.min(drag.start, t)), snapT(Math.max(drag.start, t))]);
+    S.clips.push([snapT(Math.min(drag.start, t)), snapT(Math.max(drag.start, t)), 0]);
     drag = { mode: Math.min(drag.start, t) === t ? "l" : "r", i: S.clips.length - 1, anchor: drag.start };
-    S.sel = drag.i; syncJoins();
+    S.sel = drag.i; syncJoins(); return render();
   } else if (drag.mode === "l") { const c = S.clips[drag.i]; c[0] = Math.min(snapT(t), c[1] - 0.2); }
   else if (drag.mode === "r") { const c = S.clips[drag.i]; c[1] = Math.max(snapT(t), c[0] + 0.2); }
   else if (drag.mode === "move") {
@@ -335,20 +351,36 @@ window.addEventListener("mousemove", e => {
     let a = snapT(t - drag.off); a = Math.max(0, Math.min(S.song.duration - drag.len, a));
     S.clips[drag.i][0] = a; S.clips[drag.i][1] = a + drag.len;
   }
-  render();
+  updateRow(drag.i);
 });
+// Update one clip's times without rebuilding the whole list (fast while dragging).
+function updateRow(i) {
+  const row = document.querySelectorAll("#clipList .clip")[i], c = S.clips[i];
+  if (row && c) {
+    const [a, b] = row.querySelectorAll("input[type=text]");
+    a.value = fmt(c[0]); b.value = fmt(c[1]); row.querySelector(".len").textContent = (c[1] - c[0]).toFixed(1) + " s";
+  }
+  redraw("src"); updateEstimate();
+}
 window.addEventListener("mouseup", e => {
   if (!drag) return;
   if (drag.mode === "new" || (drag.mode === "move" && !drag.moved)) { $("#srcAudio").currentTime = tAt(e); }
   drag = null; render();
 });
 window.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); return saveProject(e.shiftKey); }
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "AUDIO") return;
   if ((e.key === "Delete" || e.key === "Backspace") && S.sel >= 0) { removeClip(S.sel); e.preventDefault(); }
-  if (e.code === "Space" && S.song) { togglePlay(); e.preventDefault(); }
+  if (e.code === "Space" && S.song) {         // play/pause the player clicked last
+    e.preventDefault();
+    if (S.active === "res" && S.result) { const a = $("#resAudio"); a.paused ? a.play() : a.pause(); }
+    else togglePlay();
+  }
 });
+// Buttons give focus back, so Space never presses the last clicked button again.
+document.addEventListener("click", e => { const b = e.target.closest("button"); if (b) b.blur(); });
 $("#resCanvas").addEventListener("mousedown", e => {
-  if (!S.result) return; const r = e.target.getBoundingClientRect();
+  if (!S.result) return; setActive("res"); const r = e.target.getBoundingClientRect();
   $("#resAudio").currentTime = (e.clientX - r.left) / r.width * S.result.duration;
 });
 
@@ -452,7 +484,8 @@ let stopAt = null;
 function playRange(a, b) { const au = $("#srcAudio"); au.currentTime = a; stopAt = b; au.play(); }
 function togglePlay() { const au = $("#srcAudio"); stopAt = null; if (S.loop) { S.loop = null; renderList(); } au.paused ? au.play() : au.pause(); }
 $("#playSrc").onclick = togglePlay;
-$("#srcAudio").addEventListener("play", () => $("#playSrc").textContent = "❚❚");
+$("#srcAudio").addEventListener("play", () => { $("#playSrc").textContent = "❚❚"; $("#resAudio").pause(); setActive("src"); });
+$("#resAudio").addEventListener("play", () => { $("#srcAudio").pause(); setActive("res"); });
 $("#srcAudio").addEventListener("pause", () => $("#playSrc").textContent = "▶");
 function tick() {
   const au = $("#srcAudio");
@@ -460,15 +493,21 @@ function tick() {
     if (S.loop && S.clips.includes(S.loop)) { au.currentTime = S.loop[0]; stopAt = S.loop[1]; }
     else { au.pause(); stopAt = null; }
   }
-  if (S.song) { $("#srcTime").textContent = `${fmt(au.currentTime)} / ${fmt(S.song.duration)}`; drawSource(); }
-  if (S.result) drawResult();
+  if (S.song) {
+    const txt = `${fmt(au.currentTime)} / ${fmt(S.song.duration)}`;
+    if ($("#srcTime").textContent !== txt) $("#srcTime").textContent = txt;
+  }
+  paint(views.src); paint(views.res);
   requestAnimationFrame(tick);
 }
 
 // ---------- top-level ----------
-function render() {
-  renderList(); drawSource();
+function updateEstimate() {
   const est = estimate(); $("#estLen").textContent = isNaN(est) ? "–" : `${fmt(est)} (${S.clips.length} clip${S.clips.length === 1 ? "" : "s"})`;
+}
+function render() {
+  renderList(); redraw("src"); updateEstimate();
+  $("#saveProjBtn").disabled = $("#saveAsBtn").disabled = !S.song;
   $("#renderBtn").disabled = !S.song || !S.clips.length;
   $("#renderHint").textContent = S.song && !S.clips.length ? "Add at least one clip" : "";
 }
@@ -489,22 +528,82 @@ function setMaster(v) { v = Math.max(-60, Math.min(24, isNaN(v) ? 0 : v)); S.mas
 $("#masterRange").oninput = e => setMaster(+e.target.value);
 $("#masterDb").onchange = e => setMaster(parseFloat(e.target.value));
 
+// Set an audio element's blob URL and free the previous one.
+function setSrc(el, url) { if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src); if (url) el.src = url; else el.removeAttribute("src"); }
+// Show a loaded song. audioUrl plays the original in the browser.
+function useSong(song, audioUrl) {
+  S.song = song; S.clips = []; S.joins = []; S.sel = -1; S.result = null; S.loop = null; S.projectPath = "";
+  setSrc($("#srcAudio"), audioUrl); setSrc($("#resAudio"), null);
+  $("#info").textContent = `${song.name} · ${fmt(song.duration)} · ~${Math.round(60 / song.beat)} BPM · ${song.bars.length - 1} bars`;
+  $("#dropZone").style.display = "none"; $("#srcWrap").style.display = ""; $("#srcTransport").style.display = "";
+  $("#resultBox").style.display = "none"; $("#saveName").value = "";
+  setActive("src"); redraw(); render();
+}
 async function openFile(f) {
   if (!f) return;
+  if (/\.aetproj$/i.test(f.name)) return openProject(f);
   busy(`Analyzing “${f.name}” (beats, bars, sections)…`);
   try {
     const song = await api("/api/load", { method: "POST", body: f, headers: { "X-Filename": encodeURIComponent(f.name) } }, true);
-    S.song = song; S.clips = []; S.joins = []; S.sel = -1; S.result = null;
-    $("#srcAudio").src = URL.createObjectURL(f);
-    $("#info").textContent = `${song.name} · ${fmt(song.duration)} · ~${Math.round(60 / song.beat)} BPM · ${song.bars.length - 1} bars`;
-    $("#dropZone").style.display = "none"; $("#srcWrap").style.display = ""; $("#srcTransport").style.display = "";
-    $("#resultBox").style.display = "none";
-    render();
+    useSong(song, URL.createObjectURL(f));
   } catch (e) { toast("Could not open file: " + e.message); }
   busy(null);
 }
+
+// ---------- projects ----------
+// A project file holds the song, its analysis, the clips and all settings.
+function getState() {
+  return {
+    clips: S.clips.map(c => [c[0], c[1], gainOf(c)]),
+    joins: S.joins.map(j => ({ preset: j.preset, blend: j.blend, beats: j.beats, fx: [...j.fx], fx_level: j.fx_level })),
+    snap: S.snap, master: S.master, target: +$("#target").value,
+    fade_in: { on: $("#fadeInOn").checked, s: +$("#fadeIn").value },
+    fade_out: { on: $("#fadeOutOn").checked, s: +$("#fadeOut").value },
+    output: { folder: $("#folder").value, name: $("#saveName").value, format: $("#saveFmt").value },
+  };
+}
+function applyState(st) {
+  S.clips = (st.clips || []).map(c => [+c[0], +c[1], +(c[2] || 0)]);
+  S.joins = (st.joins || []).map(j => ({ ...newJoin(), ...j, fx: [...(j.fx || [])] }));
+  syncJoins();
+  const snapBtn = $("#snapSeg").querySelector(`[data-v="${st.snap || "bar"}"]`); if (snapBtn) snapBtn.click();
+  setMaster(+(st.master || 0));
+  if (st.target) $("#target").value = st.target;
+  if (st.fade_in) { $("#fadeInOn").checked = !!st.fade_in.on; $("#fadeIn").value = st.fade_in.s; }
+  if (st.fade_out) { $("#fadeOutOn").checked = !!st.fade_out.on; $("#fadeOut").value = st.fade_out.s; }
+  syncFades();
+  const o = st.output || {};
+  if (o.folder) $("#folder").value = o.folder;
+  if (o.name) $("#saveName").value = o.name;
+  if (o.format) $("#saveFmt").value = o.format;
+  render();
+}
+async function openProject(f) {
+  busy(`Opening project “${f.name}”…`);
+  try {
+    const r = await api("/api/project/open", { method: "POST", body: f, headers: { "X-Filename": encodeURIComponent(f.name) } }, true);
+    const blob = await (await fetch(`/api/song/${r.song.id}/audio`)).blob();
+    useSong(r.song, URL.createObjectURL(blob));
+    applyState(r.state);
+    toast(`Opened project “${f.name}”.`, true);
+  } catch (e) { toast("Could not open project: " + e.message); }
+  busy(null);
+}
+async function saveProject(saveAs) {
+  if (!S.song) return toast("Open a song first.");
+  busy(S.projectPath && !saveAs ? "Saving project…" : "Choose where to save the project…");
+  try {
+    const r = await api("/api/project/save", { id: S.song.id, state: getState(), path: S.projectPath, save_as: !!saveAs });
+    if (r.path) { S.projectPath = r.path; toast("Project saved: " + r.path, true); }
+  } catch (e) { toast("Could not save project: " + e.message); }
+  busy(null);
+}
+$("#openProjBtn").onclick = () => $("#projFile").click();
+$("#projFile").onchange = e => { openProject(e.target.files[0]); e.target.value = ""; };
+$("#saveProjBtn").onclick = () => saveProject(false);
+$("#saveAsBtn").onclick = () => saveProject(true);
 $("#openBtn").onclick = () => $("#file").click();
-$("#file").onchange = e => openFile(e.target.files[0]);
+$("#file").onchange = e => { openFile(e.target.files[0]); e.target.value = ""; };
 const dz = $("#dropZone");
 ["dragover", "dragenter"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("over"); }));
@@ -542,13 +641,13 @@ $("#renderBtn").onclick = async () => {
       fade_out_on: $("#fadeOutOn").checked, fade_out: +$("#fadeOut").value,
       fade_in_on: $("#fadeInOn").checked, fade_in: +$("#fadeIn").value });
     S.result = r;
-    const blob = await (await fetch(`/api/result/${r.rid}?format=wav`)).blob();
-    $("#resAudio").src = URL.createObjectURL(blob);
+    const blob = await (await fetch(`/api/result/${r.rid}`)).blob();
+    setSrc($("#resAudio"), URL.createObjectURL(blob));
     $("#resLen").textContent = fmt(r.duration);
     $("#resCuts").textContent = r.cuts.length ? `· transitions at ${r.cuts.map(fmt).join(", ")}` : "";
     if (!$("#saveName").value) $("#saveName").value = S.song.name.replace(/\.[^.]+$/, "") + "_edit";
     $("#savedPath").textContent = "";
-    $("#resultBox").style.display = ""; drawResult();
+    $("#resultBox").style.display = ""; redraw("res"); setActive("res");
   } catch (e) { toast("Render failed: " + e.message); }
   busy(null);
 };
@@ -578,7 +677,7 @@ $("#saveBtn").onclick = async () => {
   if (!f) { try { f = (await (await fetch("/api/config")).json()).folder; } catch (e) {} }
   $("#folder").value = f || "";
 })();
-window.addEventListener("resize", () => { drawSource(); drawResult(); });
+window.addEventListener("resize", () => redraw());
 render(); requestAnimationFrame(tick);
 </script>
 </body>

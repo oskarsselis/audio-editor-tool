@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
-
-import numpy as np
 import sys
 from pathlib import Path
 
 from . import audio_io
 from .analysis import analyze, sections
-from .planner import Settings, plan
-from .planner import jump_match
+from .fx import FX
+from .planner import Settings, jump_match, plan
 from .render import overlap_len, render, segment_times, snap
 
 
@@ -95,8 +93,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Analyzing {args.input} ...", file=sys.stderr)
     a = analyze(audio, sr)
     secs = sections(a)
-    beat = 60 / a.tempo
-    print(f"Length {fmt(a.duration)} | tempo ~{a.tempo:.0f} BPM | {a.n} bars of ~{a.bar_len:.2f}s")
+    beat = a.beat_period(a.duration / 2)
+    print(f"Length {fmt(a.duration)} | tempo ~{60 / beat:.0f} BPM | {a.n} bars of ~{a.bar_len:.2f}s")
 
     if args.analyze:
         print("\nSong map (same letter = similar music; energy 0-9):")
@@ -151,12 +149,10 @@ def finish(args, audio, sr, a, beat, times, joins, natural_end) -> int:
         gains = [float(x) for x in args.gains.split(",")] if args.gains else None
     except ValueError:
         raise SystemExit(f"--gains must be numbers in dB, e.g. 0,-3,2 (got '{args.gains}')")
-    from .fx import FX
     for f in fx:
         if f not in FX:
             raise SystemExit(f"Unknown effect '{f}'. Choose from: {', '.join(FX)}")
-    near = a.beats[np.abs(a.beats - times[0][1]) < 10]
-    beat_s = float(np.polyfit(np.arange(len(near)), near, 1)[0]) if len(near) > 4 else beat
+    beat_s = a.beat_period(times[0][1])
     out = render(audio, sr, times, natural_end, xfades, args.fade_out,
                  blend=args.blend, position=args.blend_pos, hold=args.hold, fx=fx, beat_s=beat_s,
                  fade_in_s=args.fade_in, gains_db=gains, master_db=args.master_gain)

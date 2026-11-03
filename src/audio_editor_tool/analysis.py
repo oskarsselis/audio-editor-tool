@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import io
+from dataclasses import dataclass, fields
 
 import librosa
 import numpy as np
@@ -34,6 +35,28 @@ class Analysis:
 
     def bar_at(self, t: float) -> int:
         return int(np.clip(np.searchsorted(self.bar_starts, t, side="right") - 1, 0, self.n - 1))
+
+    def beat_period(self, t: float) -> float:
+        """Beat length (s) around time t. A line fit over ~20 beats is precise even
+        though each detected beat time is rounded to an analysis frame."""
+        near = self.beats[np.abs(self.beats - t) < 10]
+        if len(near) > 4:
+            return float(np.polyfit(np.arange(len(near)), near, 1)[0])
+        return 60 / self.tempo
+
+    def to_npz(self) -> bytes:
+        """Serialize (numbers only, no pickle) so a project opens without re-analysis."""
+        buf = io.BytesIO()
+        np.savez_compressed(buf, **{f.name: np.asarray(getattr(self, f.name)) for f in fields(self)})
+        return buf.getvalue()
+
+    @classmethod
+    def from_npz(cls, data: bytes) -> "Analysis":
+        with np.load(io.BytesIO(data), allow_pickle=False) as z:
+            vals = {f.name: z[f.name] for f in fields(cls)}
+        for k in ("duration", "tempo", "onset_hop_s"):
+            vals[k] = float(vals[k])
+        return cls(**vals)
 
 
 def _cosine(x: np.ndarray) -> np.ndarray:

@@ -7,6 +7,7 @@ listens on 127.0.0.1.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -16,20 +17,37 @@ import tempfile
 import threading
 import uuid
 import webbrowser
+import zipfile
+from collections import OrderedDict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from urllib.parse import unquote, urlparse, parse_qs
+from urllib.parse import unquote, urlparse
 
 import numpy as np
 
 from . import audio_io
 
 WORKDIR = Path(tempfile.mkdtemp(prefix="audio-editor-tool-"))
-SONGS: dict[str, dict] = {}
-RESULTS: dict[str, dict] = {}
+SONGS: OrderedDict[str, dict] = OrderedDict()     # most recent last
+RESULTS: OrderedDict[str, dict] = OrderedDict()
+MAX_SONGS, MAX_RESULTS = 3, 5                     # older ones are dropped to save memory
 LOCK = threading.Lock()
+
+PROJECT_EXT = ".aetproj"
+PROJECT_FORMAT = "audio-editor-tool-project"
+AUDIO_TYPES = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
+               ".ogg": "audio/ogg", ".m4a": "audio/mp4"}
+
+
+def _remember(store: OrderedDict, key: str, value: dict, limit: int) -> None:
+    store[key] = value
+    while len(store) > limit:
+        _, old = store.popitem(last=False)
+        for k in ("path", "wav"):
+            if k in old:
+                Path(old[k]).unlink(missing_ok=True)
 
 
 def _peaks(audio: np.ndarray, buckets: int = 2400) -> list[list[float]]:
@@ -39,37 +57,42 @@ def _peaks(audio: np.ndarray, buckets: int = 2400) -> list[list[float]]:
     return np.round(np.stack([m.min(axis=1), m.max(axis=1)], axis=1), 4).tolist()
 
 
-def _local_beat(a, t: float) -> float:
-    near = a.beats[np.abs(a.beats - t) < 10]
-    if len(near) > 4:
-        return float(np.polyfit(np.arange(len(near)), near, 1)[0])
-    return 60 / a.tempo
+def _safe_name(name: str, fallback: str) -> str:
+    stem = "".join(c for c in str(name or "") if c not in '<>:"/\\|?*\0').strip(" .")
+    return stem or fallback
 
 
-def load_song(data: bytes, filename: str) -> dict:
-    from .analysis import analyze, sections
+# ---------------------------------------------------------------- songs
+
+def _add_song(data: bytes, filename: str, analysis_npz: bytes | None = None) -> dict:
+    """Store and analyze a song. Returns what the page needs to draw and edit it."""
+    from .analysis import Analysis, analyze, sections
 
     sid = uuid.uuid4().hex[:10]
-    safe = Path(filename).name or "song"
-    path = WORKDIR / f"{sid}_{safe}"
+    name = Path(filename).name or "song"
+    path = WORKDIR / f"{sid}_{name}"
     path.write_bytes(data)
     audio, sr = audio_io.load(path)
-    a = analyze(audio, sr)
+    a = None
+    if analysis_npz:
+        try:
+            a = Analysis.from_npz(analysis_npz)
+        except Exception:                       # damaged or old project: analyze again
+            a = None
+    a = a or analyze(audio, sr)
     secs = sections(a)
-    SONGS[sid] = {"path": path, "name": safe, "audio": audio, "sr": sr, "a": a, "secs": secs}
+    _remember(SONGS, sid, {"path": path, "name": name, "audio": audio, "sr": sr, "a": a,
+                           "secs": secs}, MAX_SONGS)
     return {
         "id": sid,
-        "name": safe,
+        "name": name,
         "duration": a.duration,
-        "tempo": a.tempo,
-        "beat": _local_beat(a, a.duration / 2),
+        "beat": a.beat_period(a.duration / 2),
         "bars": [float(x) for x in np.r_[a.bar_starts, a.bar_ends[-1]]],
         "beats": [float(x) for x in a.beats],
-        "sections": [
-            {"start": float(a.bar_starts[s]), "end": float(a.bar_ends[e]), "label": lab,
-             "energy": float(a.score[s:e + 1].mean())}
-            for s, e, lab in secs
-        ],
+        "sections": [{"start": float(a.bar_starts[s]), "end": float(a.bar_ends[e]),
+                      "label": lab, "energy": float(a.score[s:e + 1].mean())}
+                     for s, e, lab in secs],
         "peaks": _peaks(audio),
     }
 
@@ -80,9 +103,9 @@ def suggest(req: dict) -> dict:
 
     song = SONGS[req["id"]]
     a = song["a"]
-    cfg = Settings(target=float(req["length"]), keep=[tuple(k) for k in req.get("keep", [])],
+    cfg = Settings(target=float(req["length"]), keep=[tuple(k[:2]) for k in req.get("keep", [])],
                    start=req.get("start", "intro"), end=req.get("end", "auto"),
-                   xfade_s=0.5 * 60 / a.tempo)
+                   xfade_s=0.5 * a.beat_period(a.duration / 2))
     p = plan(a, cfg, section_starts={s for s, _, _ in song["secs"]})
     return {"clips": [[float(t0), float(t1)] for t0, t1 in segment_times(a, p)],
             "natural_end": p.natural_end}
@@ -103,42 +126,85 @@ def render(req: dict) -> dict:
         times.append((t0, t1))
     trans = []
     for (_, t1), j in zip(times[:-1], req.get("joins", [])):
-        beat = _local_beat(a, t1)
         beats = float(j.get("beats", 0.5))
-        x = overlap_len(a, t1, beats) if j.get("blend") == "overlay" else beats * beat
+        x = overlap_len(a, t1, beats) if j.get("blend") == "overlay" else beats * a.beat_period(t1)
         trans.append(Transition(blend=j.get("blend", "crossfade"), xfade_s=max(0.005, x),
                                 position=j.get("position", "before"),
                                 hold=float(j.get("hold", 0.5)), fx=list(j.get("fx", [])),
                                 fx_level=float(j.get("fx_level", 1.0))))
     while len(trans) < len(times) - 1:
         trans.append(Transition(fx=["echo", "swell"]))
-    # Fade-out off: the output ends where the last clip ends (the song's own ending
-    # if the clip reaches it).
+    # Fade-out off: the output ends where the last clip ends.
     fade_out = float(req.get("fade_out", 4.0)) if req.get("fade_out_on", True) else 0.0
-    natural = fade_out <= 0
     fade_in = float(req.get("fade_in", 0.0)) if req.get("fade_in_on", True) else 0.0
-    out, cuts = render_parts(audio, sr, times, trans, natural_end=natural,
-                             fade_out_s=fade_out,
-                             beat_s=_local_beat(a, times[0][1]),
+    out, cuts = render_parts(audio, sr, times, trans, natural_end=fade_out <= 0,
+                             fade_out_s=fade_out, beat_s=a.beat_period(times[0][1]),
                              fade_in_s=fade_in,
                              gains_db=[float(x) for x in req.get("gains", [])],
                              master_db=float(req.get("master_db", 0.0)))
     rid = uuid.uuid4().hex[:10]
     wav = WORKDIR / f"result_{rid}.wav"
     audio_io.save(wav, out, sr)
-    RESULTS[rid] = {"wav": wav, "audio": out, "sr": sr, "name": Path(song["name"]).stem}
+    _remember(RESULTS, rid, {"wav": wav, "audio": out, "sr": sr,
+                             "name": Path(song["name"]).stem}, MAX_RESULTS)
     return {"rid": rid, "duration": out.shape[1] / sr, "cuts": cuts, "peaks": _peaks(out),
-            "clips": [[t0, t1] for t0, t1 in times], "natural_end": natural}
+            "natural_end": fade_out <= 0}
 
 
-BROWSE_SCRIPT = r"""
+# ---------------------------------------------------------------- file dialogs
+
+TK_DIALOG = r"""
 import sys, tkinter as tk
 from tkinter import filedialog
+kind, start, name = sys.argv[1], sys.argv[2], sys.argv[3]
 root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
-folder = filedialog.askdirectory(initialdir=sys.argv[1] or None, mustexist=True,
-                                 title="Choose the output folder")
-print(folder or "")
+if kind == "folder":
+    out = filedialog.askdirectory(initialdir=start or None, mustexist=True,
+                                  title="Choose the output folder")
+else:
+    out = filedialog.asksaveasfilename(initialdir=start or None, initialfile=name,
+                                       defaultextension=".aetproj", title="Save project",
+                                       filetypes=[("Audio Editor project", "*.aetproj")])
+print(out or "")
 """
+
+
+def _dialog(kind: str, start: str, name: str = "") -> str:
+    """Show a native folder ('folder') or save-file ('save') dialog; '' if cancelled.
+
+    Runs in its own process so it works from a server thread on every OS. Tries
+    tkinter first, then the system's own dialog.
+    """
+    q = lambda v: v.replace("'", "''")          # PowerShell single-quoted string
+    attempts = [[sys.executable, "-c", TK_DIALOG, kind, start, name]]
+    if os.name == "nt":
+        if kind == "folder":
+            ps = ("$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
+                  f"$d.Description = 'Choose the output folder'; $d.SelectedPath = '{q(start)}';"
+                  "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }")
+        else:
+            ps = ("$d = New-Object System.Windows.Forms.SaveFileDialog;"
+                  "$d.Filter = 'Audio Editor project (*.aetproj)|*.aetproj';"
+                  f"$d.InitialDirectory = '{q(start)}'; $d.FileName = '{q(name)}';"
+                  "if ($d.ShowDialog() -eq 'OK') { $d.FileName }")
+        attempts.append(["powershell", "-NoProfile", "-STA", "-Command",
+                         "Add-Type -AssemblyName System.Windows.Forms;" + ps])
+    elif sys.platform == "darwin":
+        script = ('POSIX path of (choose folder with prompt "Choose the output folder")'
+                  if kind == "folder" else
+                  f'POSIX path of (choose file name with prompt "Save project" '
+                  f'default name "{name}")')
+        attempts.append(["osascript", "-e", script])
+    for cmd in attempts:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0:
+            return r.stdout.strip()
+        if cmd[0] == "osascript" and "-128" in r.stderr:
+            return ""                            # user cancelled
+    raise RuntimeError("Could not open a file dialog.")
 
 
 def default_folder() -> str:
@@ -150,36 +216,22 @@ def default_folder() -> str:
 
 
 def browse(req: dict) -> dict:
-    """Open a system folder dialog. Tries tkinter, then the OS's own dialog.
-
-    Runs in a separate process so it works from the server thread on every OS.
-    Returns {"folder": ""} when the user cancels.
-    """
-    start = req.get("folder") or default_folder()
-    attempts = [[sys.executable, "-c", BROWSE_SCRIPT, start]]
-    if os.name == "nt":
-        ps = ("Add-Type -AssemblyName System.Windows.Forms;"
-              "$f = New-Object System.Windows.Forms.FolderBrowserDialog;"
-              "$f.Description = 'Choose the output folder';"
-              f"$f.SelectedPath = '{start.replace(chr(39), chr(39) * 2)}';"
-              "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }")
-        attempts.append(["powershell", "-NoProfile", "-STA", "-Command", ps])
-    elif sys.platform == "darwin":
-        attempts.append(["osascript", "-e",
-                         'POSIX path of (choose folder with prompt "Choose the output folder")'])
-    for cmd in attempts:
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if r.returncode == 0:
-            return {"folder": r.stdout.strip()}
-        if sys.platform == "darwin" and cmd[0] == "osascript" and "-128" in r.stderr:
-            return {"folder": ""}                # user cancelled
-    raise RuntimeError("Could not open the folder dialog. Type the folder path instead.")
+    try:
+        return {"folder": _dialog("folder", req.get("folder") or default_folder())}
+    except RuntimeError:
+        raise RuntimeError("Could not open the folder dialog. Type the folder path instead.")
 
 
-def save(req: dict) -> dict:
+def _unique(path: Path) -> Path:
+    """'name.ext', or 'name (2).ext', ... so an existing file is never overwritten."""
+    n, out = 2, path
+    while out.exists():
+        out = path.with_name(f"{path.stem} ({n}){path.suffix}")
+        n += 1
+    return out
+
+
+def save_output(req: dict) -> dict:
     """Save the rendered result to a folder the user chose."""
     rid, fmt = req.get("rid"), req.get("format", "mp3")
     if rid not in RESULTS:
@@ -189,39 +241,74 @@ def save(req: dict) -> dict:
     folder = Path(os.path.expanduser(str(req.get("folder") or default_folder())))
     if not folder.is_dir():
         raise ValueError(f"Folder not found: {folder}")
-    stem = "".join(c for c in str(req.get("name") or "") if c not in '<>:"/\\|?*').strip()
-    stem = stem or f"{RESULTS[rid]['name']}_edit"
-    path = folder / f"{stem}.{fmt}"
-    n = 2
-    while path.exists():                      # never overwrite: "name (2).mp3", ...
-        path = folder / f"{stem} ({n}).{fmt}"
-        n += 1
     r = RESULTS[rid]
+    path = _unique(folder / f"{_safe_name(req.get('name'), r['name'] + '_edit')}.{fmt}")
     audio_io.save(path, r["audio"], r["sr"])
     return {"path": str(path)}
 
 
-def export(rid: str, fmt: str) -> Path:
-    r = RESULTS[rid]
-    if fmt == "wav":
-        return r["wav"]
-    path = WORKDIR / f"{r['name']}_edit_{rid}.{fmt}"
-    if not path.exists():
-        audio_io.save(path, r["audio"], r["sr"])
-    return path
+# ---------------------------------------------------------------- projects
+# A project is one zip file: project.json (clips and settings), the song itself,
+# and the analysis (so opening is instant).
 
+def save_project(req: dict) -> dict:
+    song = SONGS.get(req.get("id"))
+    if not song:
+        raise ValueError("Open a song first.")
+    path = req.get("path") if not req.get("save_as") else None
+    if not path:
+        state = req.get("state", {})
+        folder = (state.get("output") or {}).get("folder") or default_folder()
+        name = Path(song["name"]).stem + PROJECT_EXT
+        try:
+            path = _dialog("save", folder, name)
+        except RuntimeError:                     # no dialog: save next to the output
+            path = str(_unique(Path(os.path.expanduser(folder)) / name))
+        if not path:
+            return {"path": ""}                  # cancelled
+    path = Path(path)
+    if path.suffix.lower() != PROJECT_EXT:
+        path = path.with_name(path.name + PROJECT_EXT)
+    meta = {"format": PROJECT_FORMAT, "version": 1, "audio": song["name"],
+            "state": req.get("state", {})}
+    tmp = path.with_name(path.name + ".tmp")
+    with zipfile.ZipFile(tmp, "w") as z:
+        z.writestr("project.json", json.dumps(meta, indent=2))
+        z.write(song["path"], "audio/" + song["name"], compress_type=zipfile.ZIP_STORED)
+        z.writestr("analysis.npz", song["a"].to_npz())
+    os.replace(tmp, path)                        # never leave a half-written project
+    return {"path": str(path)}
+
+
+def open_project(data: bytes) -> dict:
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+        meta = json.loads(z.read("project.json"))
+    except (zipfile.BadZipFile, KeyError, ValueError):
+        raise ValueError("This is not an Audio Editor project file.")
+    if meta.get("format") != PROJECT_FORMAT:
+        raise ValueError("This is not an Audio Editor project file.")
+    name = Path(str(meta.get("audio", ""))).name
+    try:
+        audio = z.read("audio/" + name)
+    except KeyError:
+        raise ValueError("The project file does not contain its song.")
+    npz = z.read("analysis.npz") if "analysis.npz" in z.namelist() else None
+    song = _add_song(audio, name, npz)
+    return {"song": song, "state": meta.get("state", {})}
+
+
+# ---------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep the console quiet
         pass
 
-    def _send(self, body: bytes, ctype: str, status=HTTPStatus.OK, headers: dict | None = None):
+    def _send(self, body: bytes, ctype: str, status=HTTPStatus.OK):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        for k, v in (headers or {}).items():
-            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -229,51 +316,42 @@ class Handler(BaseHTTPRequestHandler):
         self._send(json.dumps(obj).encode(), "application/json", status)
 
     def do_GET(self):
-        url = urlparse(self.path)
-        if url.path in ("/", "/index.html"):
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
             html = resources.files("audio_editor_tool").joinpath("web/index.html").read_bytes()
             return self._send(html, "text/html; charset=utf-8")
-        if url.path == "/api/config":
+        if path == "/api/config":
             return self._json({"folder": default_folder()})
-        if url.path.startswith("/api/result/"):
-            rid = url.path.rsplit("/", 1)[-1]
-            fmt = parse_qs(url.query).get("format", ["wav"])[0]
-            if rid not in RESULTS or fmt not in ("wav", "mp3", "flac"):
-                return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-            try:
-                path = export(rid, fmt)
-            except Exception as e:  # e.g. ffmpeg missing for mp3
-                return self._json({"error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            ctype = {"wav": "audio/wav", "mp3": "audio/mpeg", "flac": "audio/flac"}[fmt]
-            headers = {}
-            if "download" in parse_qs(url.query):
-                headers["Content-Disposition"] = (
-                    f'attachment; filename="{RESULTS[rid]["name"]}_edit.{fmt}"')
-            return self._send(path.read_bytes(), ctype, headers=headers)
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[:2] == ["api", "result"] and parts[2] in RESULTS:
+            return self._send(RESULTS[parts[2]]["wav"].read_bytes(), "audio/wav")
+        if len(parts) == 4 and parts[:2] == ["api", "song"] and parts[3] == "audio" \
+                and parts[2] in SONGS:
+            song = SONGS[parts[2]]
+            ctype = AUDIO_TYPES.get(Path(song["name"]).suffix.lower(), "application/octet-stream")
+            return self._send(song["path"].read_bytes(), ctype)
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self):
-        url = urlparse(self.path)
-        size = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(size)
+        path = urlparse(self.path).path
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         try:
-            if url.path == "/api/load":
-                name = unquote(self.headers.get("X-Filename", "song"))
+            if path == "/api/load":
                 with LOCK:
-                    return self._json(load_song(body, name))
+                    return self._json(_add_song(body, unquote(self.headers.get("X-Filename", "song"))))
+            if path == "/api/project/open":
+                with LOCK:
+                    return self._json(open_project(body))
             req = json.loads(body or b"{}")
-            if url.path == "/api/browse":
-                return self._json(browse(req))
-            if url.path == "/api/save":
-                return self._json(save(req))
+            handlers = {"/api/browse": browse, "/api/save": save_output,
+                        "/api/project/save": save_project}
+            if path in handlers:
+                return self._json(handlers[path](req))
             if req.get("id") not in SONGS:
                 return self._json({"error": "Open a song first."}, HTTPStatus.BAD_REQUEST)
-            if url.path == "/api/suggest":
+            if path in ("/api/suggest", "/api/render"):
                 with LOCK:
-                    return self._json(suggest(req))
-            if url.path == "/api/render":
-                with LOCK:
-                    return self._json(render(req))
+                    return self._json((suggest if path == "/api/suggest" else render)(req))
         except Exception as e:
             return self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -281,10 +359,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def _open_window(url: str) -> None:
     """Open as a standalone app window (Chrome/Edge app mode) if possible, else a browser tab."""
-    candidates = [
-        shutil.which(n) for n in ("google-chrome", "chrome", "chromium", "chromium-browser",
-                                  "msedge", "microsoft-edge")
-    ]
+    candidates = [shutil.which(n) for n in ("google-chrome", "chrome", "chromium",
+                                            "chromium-browser", "msedge", "microsoft-edge")]
     if sys.platform == "darwin":
         candidates += ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
                        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]

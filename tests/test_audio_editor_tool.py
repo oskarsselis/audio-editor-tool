@@ -4,6 +4,7 @@ import importlib.util
 import json
 import shutil
 import threading
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -103,7 +104,7 @@ def test_gui_server_round_trip(demo):
                            "fade_out_on": True, "fade_out": 3}).encode()
         res = post("/api/render", body, {"Content-Type": "application/json"})
         assert len(res["cuts"]) == 2 and res["duration"] > 40
-        wav = urllib.request.urlopen(f"{base}/api/result/{res['rid']}?format=wav").read()
+        wav = urllib.request.urlopen(f"{base}/api/result/{res['rid']}").read()
         assert wav[:4] == b"RIFF"
         # save into a chosen folder; a second save must not overwrite the first
         folder = path.parent / "out"
@@ -113,6 +114,24 @@ def test_gui_server_round_trip(demo):
         second = post("/api/save", json.dumps(body).encode(), {"Content-Type": "application/json"})
         assert Path(first["path"]).name == "my edit.wav"
         assert Path(second["path"]).name == "my edit (2).wav"
+        # project: save to a given path, open it again -> same song, clips and settings
+        state = {"clips": [[7.9, 23.6, -2], [55.1, 70.8, 0]], "master": -1,
+                 "fade_out": {"on": False, "s": 4}}
+        proj = folder / "my project.aetproj"
+        saved = post("/api/project/save", json.dumps({"id": song["id"], "state": state,
+                                                      "path": str(proj)}).encode(),
+                     {"Content-Type": "application/json"})
+        assert Path(saved["path"]) == proj and proj.stat().st_size > 100_000
+        opened = post("/api/project/open", proj.read_bytes(), {"X-Filename": proj.name})
+        assert opened["state"] == state
+        assert opened["song"]["bars"] == song["bars"]          # analysis restored, not redone
+        audio = urllib.request.urlopen(f"{base}/api/song/{opened['song']['id']}/audio").read()
+        assert audio == path.read_bytes()
+        try:
+            post("/api/project/open", b"not a zip", {"X-Filename": "x.aetproj"})
+            raise AssertionError("bad project accepted")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
         if shutil.which("ffmpeg"):
             body["format"] = "mp3"
             mp3 = post("/api/save", json.dumps(body).encode(), {"Content-Type": "application/json"})
@@ -175,3 +194,26 @@ def test_fade_out_off_ends_at_clip_end(demo):
     out, _ = render_parts(audio, sr, [(23.6, 39.3)], [], natural_end=True, fade_out_s=0)
     assert abs(out.shape[1] / sr - 15.7) < 0.01
     assert np.abs(out[:, -int(0.5 * sr):-int(0.1 * sr)]).max() > 0.05   # not faded
+
+
+def test_analysis_round_trip(demo):
+    from audio_editor_tool.analysis import Analysis
+    *_, a = demo
+    b = Analysis.from_npz(a.to_npz())
+    assert b.duration == a.duration and b.tempo == a.tempo
+    assert np.array_equal(b.bar_starts, a.bar_starts) and np.array_equal(b.sim, a.sim)
+    assert b.beat_period(30) == a.beat_period(30)
+
+
+def test_editor_keeps_only_recent_items(tmp_path):
+    from collections import OrderedDict
+    from audio_editor_tool.gui import _remember
+    store = OrderedDict()
+    files = []
+    for i in range(5):
+        f = tmp_path / f"r{i}.wav"
+        f.write_bytes(b"x")
+        files.append(f)
+        _remember(store, str(i), {"wav": f}, limit=3)
+    assert list(store) == ["2", "3", "4"]
+    assert not files[0].exists() and files[4].exists()        # old temp files deleted

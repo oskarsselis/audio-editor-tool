@@ -72,11 +72,14 @@ The editor opens in a new window. Keep the console window open while you use the
 5. Set the fades and the master volume.
 6. Click **Render preview**. Listen to the result.
 7. Select the output folder and the file format. Click **Save**.
+8. To keep the clips and the settings for a later time, click **Save project**.
 
 ## Editor settings
 
 | Setting | Function |
 |---|---|
+| **Open project**, **Save project**, **Save as** | A project file (`.aetproj`) contains the song, the clips, and all the settings. **Save as** saves the project to a new file. You can also drop a project file on the editor window. |
+| **Keys** | **Space** starts or stops the player that you clicked last: the song or the result. **Delete** removes the selected clip. **Ctrl+S** saves the project. |
 | **Snap** | Moves the clip edges to the nearest bar line, to the nearest beat, or to no grid (**Off**). |
 | **Sections** | The letters above the waveform show the song sections. The same letter shows similar music. |
 | **Clip buttons** | ▶ plays the clip one time. ⟳ plays the clip again and again. ↑ and ↓ change the play order. **+** adds a clip after the clip. ✕ removes the clip. |

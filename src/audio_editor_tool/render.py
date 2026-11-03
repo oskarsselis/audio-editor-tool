@@ -36,9 +36,7 @@ def segment_times(a: Analysis, p: Plan) -> list[tuple[float, float]]:
 
 def overlap_len(a: Analysis, t_end: float, beats: float) -> float:
     """Overlap length ending at t_end that spans whole beats of the real beat grid."""
-    near = a.beats[np.abs(a.beats - t_end) < 10]
-    # Line fit over ~20 beats: precise even though each beat time is frame-quantized
-    period = float(np.polyfit(np.arange(len(near)), near, 1)[0]) if len(near) > 4 else 60 / a.tempo
+    period = a.beat_period(t_end)
     start = _refine(a, t_end - beats * period, window=0.03)
     return t_end - start
 
@@ -94,7 +92,7 @@ def _overlay(xa: np.ndarray, xb: np.ndarray, sr: int, hold: float) -> np.ndarray
 
 def _limit(x: np.ndarray, sr: int, ceiling: float = 0.98) -> np.ndarray:
     """Simple look-ahead peak limiter, so overlaps don't clip."""
-    from scipy.ndimage import maximum_filter1d, minimum_filter1d, uniform_filter1d
+    from scipy.ndimage import minimum_filter1d, uniform_filter1d
     peak = np.abs(x).max(axis=0)
     if peak.max() <= ceiling:
         return x

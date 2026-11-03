@@ -17,3 +17,4 @@ wheels/
 *.ogg
 test_run/
 .pytest_cache/
+*.aetproj
