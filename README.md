@@ -54,14 +54,14 @@ Audio Editor Tool makes a short edit of a song. You select clips of the song. Th
 
 ## Start the editor
 
-- On Windows, double-click `Start-Audio-Editor.bat` in the tool folder.
+- On Windows, double-click `Start-Audio-Editor.bat` in the tool folder. The console window closes after 1 to 2 seconds.
 - On all systems, run this command in the tool folder:
 
   ```bash
   uv run audio-editor-tool-gui
   ```
 
-The editor opens in a new window. Keep the console window open while you use the editor. To stop the editor, close the console window.
+The editor opens in its own window. To stop the editor, close the window.
 
 ## Make an edit
 
@@ -119,7 +119,7 @@ To see all the options, run `uv run audio-editor-tool --help`.
 |---|---|
 | PowerShell does not find `uv`, `git`, or `ffmpeg`. | Open a new PowerShell window. If the problem continues, restart the computer. |
 | PowerShell does not find `winget`. | Install **App Installer** from the Microsoft Store. |
-| The editor does not start because the port is in use. | Close the other editor window. Or run `uv run audio-editor-tool-gui --port 8766`. |
+| On Windows, the editor opens in the web browser, not in its own window. | Install the Microsoft Edge WebView2 Runtime. |
 | **Browse** does not open a folder dialog. | Type the folder path in **Save to**. |
 | The tool cannot save an MP3 file. | Install ffmpeg. Then start the editor again. |
 

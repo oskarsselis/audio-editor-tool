@@ -217,3 +217,49 @@ def test_editor_keeps_only_recent_items(tmp_path):
         _remember(store, str(i), {"wav": f}, limit=3)
     assert list(store) == ["2", "3", "4"]
     assert not files[0].exists() and files[4].exists()        # old temp files deleted
+
+
+def test_browser_mode_stops_after_page_closes():
+    from audio_editor_tool.gui import _Life
+    life = _Life()
+    t = life.started
+    assert not life.should_stop(t + 60) and life.should_stop(t + 121)   # page never opened
+    life.last_ping = t + 1
+    assert not life.should_stop(t + 100)
+    life.bye_at = t + 2                                                 # page closed
+    assert not life.should_stop(t + 4) and life.should_stop(t + 8)
+    life.last_ping = t + 3                                              # reload: pings again
+    assert not life.should_stop(t + 30)
+    assert life.should_stop(t + 3 + 181)                                # silent for 3 minutes
+
+
+def test_detach_keeps_running_after_launcher_exits():
+    """The Windows launcher starts the app with --detach and then closes."""
+    import socket
+    import subprocess
+    import sys
+    import time
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    launcher = subprocess.run([sys.executable, "-m", "audio_editor_tool.gui", "--detach",
+                               "--no-window", "--port", str(port)], timeout=30)
+    assert launcher.returncode == 0
+    url = f"http://127.0.0.1:{port}"
+    for _ in range(60):                     # the hidden app needs a moment to start
+        try:
+            info = json.load(urllib.request.urlopen(url + "/api/config", timeout=1))
+            break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        raise AssertionError("detached app did not start")
+    assert info["app"] == "audio-editor-tool"
+    urllib.request.urlopen(urllib.request.Request(url + "/api/quit", data=b"", method="POST"))
+    for _ in range(20):
+        try:
+            urllib.request.urlopen(url + "/api/config", timeout=1)
+            time.sleep(0.5)
+        except OSError:
+            return
+    raise AssertionError("app did not stop after quit")

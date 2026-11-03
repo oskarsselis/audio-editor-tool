@@ -1,7 +1,9 @@
-"""Visual editor: a local web app that opens in its own window.
+"""Visual editor: a local web page shown in its own app window.
 
-Run `audio-editor-tool-gui`. Everything stays on your computer; the server only
-listens on 127.0.0.1.
+Run `audio-editor-tool-gui`. A small server on 127.0.0.1 does the audio work.
+On Windows and macOS the page opens in a native window (pywebview); closing the
+window stops the app. Elsewhere it opens in the browser, and the app stops soon
+after the page is closed. Everything stays on your computer.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import webbrowser
 import zipfile
@@ -34,6 +37,9 @@ SONGS: OrderedDict[str, dict] = OrderedDict()     # most recent last
 RESULTS: OrderedDict[str, dict] = OrderedDict()
 MAX_SONGS, MAX_RESULTS = 3, 5                     # older ones are dropped to save memory
 LOCK = threading.Lock()
+WINDOW = None                                     # the pywebview window, if one is open
+SERVER: ThreadingHTTPServer | None = None
+APP_ID = "audio-editor-tool"
 
 PROJECT_EXT = ".aetproj"
 PROJECT_FORMAT = "audio-editor-tool-project"
@@ -172,9 +178,20 @@ print(out or "")
 def _dialog(kind: str, start: str, name: str = "") -> str:
     """Show a native folder ('folder') or save-file ('save') dialog; '' if cancelled.
 
-    Runs in its own process so it works from a server thread on every OS. Tries
-    tkinter first, then the system's own dialog.
+    In the app window: its own dialog (stays on top of the window). Otherwise a
+    separate process with tkinter, then the system's own dialog.
     """
+    if WINDOW is not None:
+        import webview
+        if kind == "folder":
+            r = WINDOW.create_file_dialog(webview.FileDialog.FOLDER, directory=start)
+        else:
+            r = WINDOW.create_file_dialog(webview.FileDialog.SAVE, directory=start,
+                                          save_filename=name,
+                                          file_types=("Audio Editor project (*.aetproj)",))
+        if isinstance(r, (list, tuple)):
+            r = r[0] if r else ""
+        return str(r or "")
     q = lambda v: v.replace("'", "''")          # PowerShell single-quoted string
     attempts = [[sys.executable, "-c", TK_DIALOG, kind, start, name]]
     if os.name == "nt":
@@ -321,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
             html = resources.files("audio_editor_tool").joinpath("web/index.html").read_bytes()
             return self._send(html, "text/html; charset=utf-8")
         if path == "/api/config":
-            return self._json({"folder": default_folder()})
+            return self._json({"app": APP_ID, "folder": default_folder()})
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[:2] == ["api", "result"] and parts[2] in RESULTS:
             return self._send(RESULTS[parts[2]]["wav"].read_bytes(), "audio/wav")
@@ -335,6 +352,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if path == "/api/quit":                         # stop the app (used by tests)
+            self._json({})
+            LIFE.quit = True
+            if WINDOW is not None:
+                WINDOW.destroy()
+            elif SERVER is not None:
+                threading.Thread(target=SERVER.shutdown, daemon=True).start()
+            return
+        if path in ("/api/ping", "/api/bye"):
+            LIFE.ping() if path == "/api/ping" else LIFE.bye()
+            return self._json({})
         try:
             if path == "/api/load":
                 with LOCK:
@@ -357,7 +385,40 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
 
-def _open_window(url: str) -> None:
+class _Life:
+    """Browser mode only: stop the app after its page is closed.
+
+    The page pings every few seconds and says "bye" when it closes. A reload says
+    bye and pings again at once, so it is not mistaken for a close. A minimized
+    window can slow the pings to one per minute, so silence alone waits 3 minutes.
+    """
+
+    def __init__(self):
+        self.quit = False
+        self.last_ping = self.bye_at = 0.0
+        self.started = time.monotonic()
+
+    def ping(self):
+        self.last_ping = time.monotonic()
+
+    def bye(self):
+        self.bye_at = time.monotonic()
+
+    def should_stop(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        if self.quit:
+            return True
+        if not self.last_ping:                          # page never opened
+            return now - self.started > 120
+        if self.bye_at > self.last_ping and now - self.bye_at > 5:
+            return True
+        return now - self.last_ping > 180
+
+
+LIFE = _Life()
+
+
+def _browser_window(url: str) -> None:
     """Open as a standalone app window (Chrome/Edge app mode) if possible, else a browser tab."""
     candidates = [shutil.which(n) for n in ("google-chrome", "chrome", "chromium",
                                             "chromium-browser", "msedge", "microsoft-edge")]
@@ -380,24 +441,122 @@ def _open_window(url: str) -> None:
     webbrowser.open(url)
 
 
+def _native_window(url: str, self_test: bool = False) -> bool | None:
+    """Show the editor in a native window and block until it is closed.
+
+    Returns None if no native window is possible here (then use the browser).
+    With self_test, check that the page loads and the header is visible, then
+    close the window; returns True if the check passed.
+    """
+    global WINDOW
+    try:
+        import webview
+    except ImportError:
+        return None
+    result = {"ok": not self_test}
+
+    def check(win):
+        if not win.events.loaded.wait(60):
+            print("self-test: page did not load", flush=True)
+        else:
+            info = win.evaluate_js("JSON.stringify({top: document.querySelector('#openBtn')"
+                                   ".getBoundingClientRect().top, title: document.title})")
+            print("self-test:", info, flush=True)
+            data = json.loads(info or "{}")
+            result["ok"] = data.get("title") == "Audio Editor Tool" and data.get("top", -1) >= 0
+        win.destroy()
+
+    storage = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share") / APP_ID
+    try:
+        WINDOW = webview.create_window("Audio Editor Tool", url, width=1400, height=900,
+                                       min_size=(960, 640), background_color="#0f1115",
+                                       text_select=True)
+        webview.start(check if self_test else None, (WINDOW,) if self_test else None,
+                      private_mode=False, storage_path=str(storage),
+                      gui="edgechromium" if os.name == "nt" else None)
+    except Exception as e:                              # e.g. WebView2 missing
+        print(f"No app window ({e}); using the browser.", file=sys.stderr)
+        WINDOW = None
+        return None
+    WINDOW = None
+    return result["ok"]
+
+
+def _detach(argv: list[str]) -> int:
+    """Start the editor again as a hidden background process and return at once,
+    so the console window that launched it can close."""
+    cmd = [sys.executable, "-m", "audio_editor_tool.gui", *[a for a in argv if a != "--detach"]]
+    kw: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL, "close_fds": True}
+    if os.name != "nt":
+        subprocess.Popen(cmd, start_new_session=True, **kw)
+        return 0
+    # A hidden console: tools started later (ffmpeg, dialogs) do not flash a window.
+    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    try:   # leave the launcher's job object, so closing the launcher does not stop us
+        subprocess.Popen(cmd, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kw)
+    except OSError:                                     # breakaway not allowed
+        subprocess.Popen(cmd, creationflags=flags, **kw)
+    return 0
+
+
+def _fatal(msg: str) -> None:
+    print(msg, file=sys.stderr)
+    if os.name == "nt":                                 # visible even without a console
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, msg, "Audio Editor Tool", 0x10)
+
+
+def _make_server(port: int) -> ThreadingHTTPServer:
+    try:
+        return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError:                                     # port in use: take any free port
+        return ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     ap = argparse.ArgumentParser(prog="audio-editor-tool-gui", description="Open the visual editor.")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--no-window", action="store_true", help="don't open a window, just serve")
+    ap.add_argument("--browser", action="store_true", help="use the web browser, not an app window")
+    ap.add_argument("--no-window", action="store_true", help="only run the server (for tests)")
+    ap.add_argument("--detach", action="store_true", help="run in the background without a console")
+    ap.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    if args.detach:
+        return _detach(argv)
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    url = f"http://127.0.0.1:{server.server_address[1]}/"
-    print(f"Audio Editor Tool running at {url}  (Ctrl+C to quit)")
-    if not args.no_window:
-        threading.Timer(0.5, _open_window, args=(url,)).start()
+    global SERVER
     try:
-        server.serve_forever()
+        server = SERVER = _make_server(args.port)
+    except OSError as e:
+        _fatal(f"Could not start the editor: {e}")
+        return 1
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    print(f"Audio Editor Tool running at {url}  (close the window to quit)", flush=True)
+    code = 0
+    try:
+        if args.no_window:
+            server.serve_forever()
+        else:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            ok = None if args.browser else _native_window(url, args.self_test)
+            if ok is None:                              # browser mode
+                if args.self_test:
+                    print("self-test: no app window on this system", flush=True)
+                    return 0
+                _browser_window(url)
+                while not LIFE.should_stop():
+                    time.sleep(1)
+            elif not ok:
+                code = 1
     except KeyboardInterrupt:
         pass
     finally:
+        server.shutdown()
+        server.server_close()
         shutil.rmtree(WORKDIR, ignore_errors=True)
-    return 0
+    return code
 
 
 if __name__ == "__main__":

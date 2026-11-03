@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -22,3 +23,14 @@ jobs:
         run: choco install ffmpeg -y --no-progress
       - name: Run tests
         run: uv run pytest -q
+      - name: App window opens, shows the header, and the app exits when it closes
+        if: runner.os != 'Linux'
+        timeout-minutes: 5
+        run: uv run --no-sync audio-editor-tool-gui --self-test --port 0
+      - name: Launcher starts the app hidden and returns (as Start-Audio-Editor.bat does)
+        shell: bash
+        run: |
+          uv run --no-sync audio-editor-tool-gui --detach --no-window --port 8799
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8799/api/config && break; sleep 1; done
+          curl -sf http://127.0.0.1:8799/api/config
+          curl -sf -X POST http://127.0.0.1:8799/api/quit
