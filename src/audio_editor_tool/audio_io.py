@@ -37,9 +37,15 @@ def save(path: str | Path, audio: np.ndarray, sr: int) -> None:
         return
     if not shutil.which("ffmpeg"):
         raise RuntimeError(f"Saving {path.suffix} needs ffmpeg (or use .wav/.flac)")
-    with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
-        sf.write(tmp.name, audio, sr, subtype="FLOAT")
+    # A temporary folder, not NamedTemporaryFile: on Windows an open temp file
+    # cannot be opened again by name.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir) / "audio.wav"
+        sf.write(tmp, audio, sr, subtype="FLOAT")
         extra = ["-b:a", "320k"] if path.suffix.lower() == ".mp3" else []
-        subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-i", tmp.name, *extra, str(path)], check=True
+        result = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(tmp), *extra, str(path)],
+            capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg could not write {path.name}: {result.stderr.strip()}")

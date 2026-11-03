@@ -1,46 +1,38 @@
 # Audio Editor Tool
 
-Make short edits of a song with smooth, beat-matched transitions. Pick the parts you want in a visual editor (or let the tool pick them for a target length). It joins them on the beat with crossfades and DJ-style transition effects.
+Audio Editor Tool makes a short edit of a song. You select clips of the song. The tool joins the clips on the beat with smooth transitions and transition effects.
 
 ![Editor window](docs/screenshot.png)
 
-## Install
+## Requirements
 
-Requirements:
+- [uv](https://docs.astral.sh/uv/). uv also installs Python.
+- [Git](https://git-scm.com/).
+- [ffmpeg](https://ffmpeg.org/). You must have ffmpeg to open and save MP3 and M4A files. WAV, FLAC, and OGG files do not need ffmpeg.
 
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- Python 3.12+ (uv can install it for you)
-- [ffmpeg](https://ffmpeg.org/download.html) (optional) to read and export MP3/M4A. WAV, FLAC and OGG work without it.
+## Install on Windows
 
-```bash
-git clone https://github.com/oskarsselis/audio-editor-tool.git
-cd audio-editor-tool
-uv sync
-```
-
-## Windows setup
-
-One-time setup. Open **PowerShell** (Start menu → type `PowerShell`) and run these commands one at a time.
-
-1. Install uv (it also installs Python for you):
+1. Open PowerShell.
+2. Install uv:
 
    ```powershell
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-2. Install Git and ffmpeg (ffmpeg is needed for MP3):
+3. Install Git:
 
    ```powershell
    winget install -e --id Git.Git
    ```
 
+4. Install ffmpeg:
+
    ```powershell
    winget install -e --id Gyan.FFmpeg
    ```
 
-3. **Close PowerShell and open a new one** so the new programs are found. Check that they work: `uv --version`, `git --version` and `ffmpeg -version` should each print a version.
-
-4. Download the project and install its dependencies:
+5. Close PowerShell. Then open a new PowerShell window.
+6. Download the tool and its dependencies:
 
    ```powershell
    cd $HOME\Documents
@@ -49,94 +41,105 @@ One-time setup. Open **PowerShell** (Start menu → type `PowerShell`) and run t
    uv sync
    ```
 
-**Start the editor:** double-click **`Start-Audio-Editor.bat`** in the `Documents\audio-editor-tool` folder, or run `uv run audio-editor-tool-gui` in PowerShell from that folder. A window opens in Microsoft Edge app mode (or Chrome). Keep the black console window open while you work; close it to quit.
+## Install on macOS and Linux
 
-**Update to the latest version:** run `git pull` and then `uv sync` in the project folder.
+1. Install uv, Git, and ffmpeg with the package manager of your system.
+2. Download the tool and its dependencies:
 
-**Troubleshooting:**
-- *"uv / git / ffmpeg is not recognized"*: open a new PowerShell window after installing. If it still fails, restart Windows.
-- *`winget` not found*: install **App Installer** from the Microsoft Store.
-- *Port already in use*: an editor is already running. Close its console window, or start a second one with `uv run audio-editor-tool-gui --port 8766`.
-- *Antivirus warning about uv*: allow it. uv is the open-source Python tool from Astral.
+   ```bash
+   git clone https://github.com/oskarsselis/audio-editor-tool.git
+   cd audio-editor-tool
+   uv sync
+   ```
 
-## Editor window
+## Start the editor
 
-```bash
-uv run audio-editor-tool-gui
-```
+- On Windows, double-click `Start-Audio-Editor.bat` in the tool folder.
+- On all systems, run this command in the tool folder:
 
-This opens the editor in its own window. It uses Chrome/Edge app mode if one is installed, and otherwise your default browser. Everything runs locally on your computer.
+  ```bash
+  uv run audio-editor-tool-gui
+  ```
 
-1. Open or drop an audio file. The tool detects beats, bars and sections (same letter = similar music, e.g. choruses).
-2. Add clips: drag on the waveform, or type start/end times. You can use as many clips as you like, from any part of the song, in any order.
-3. Set each transition: pick a preset, or choose the blend, its length and effects yourself.
-4. Choose the ending, then click **Render preview**, listen, and download MP3/WAV/FLAC.
+The editor opens in a new window. Keep the console window open while you use the editor. To stop the editor, close the console window.
 
-### Options
+## Make an edit
 
-| Option | What it does |
+1. Click **Open audio** and select a song. The tool finds the beats, the bars, and the sections of the song.
+2. Add clips. Drag on the waveform, or click **+ Add clip**. A new clip starts at the playhead.
+3. Adjust each clip. Drag the clip edges, or type the start and end times.
+4. Set the transition between each pair of clips.
+5. Set the fades and the master volume.
+6. Click **Render preview**. Listen to the result.
+7. Select the output folder and the file format. Click **Save**.
+
+## Editor settings
+
+| Setting | Function |
 |---|---|
-| **Snap: Bar / Beat / Off** | Clip edges lock to bar lines (smoothest), beats, or nothing. |
-| **Clips** | Drag to add, move or resize. Edit times directly. Use ▶ to play a clip, ↑ ↓ to change the order and ✕ to delete one. **Sort by time** puts clips in song order. |
-| **Transition preset** | **Smooth (echo + swell)** (default), **Clean cut**, **Build-up (sweep + riser)**, **DJ blend (bass swap)**, **Overlay**. |
-| **Blend** | **Crossfade**: short fade that lands on the next downbeat. **DJ bass swap**: highs blend while the bass switches on the beat. **Overlay**: the next clip starts underneath the end of the previous one. |
-| **Length** | Blend length in beats (4 = one bar). |
-| **Effects** | **Riser**: a noise sweep that builds up. **Swell**: reverse reverb into the next clip. **Echo**: echoes of the last beat. **Sweep**: drains the bass before the cut. Combine them freely. **FX vol** sets their volume. |
-| **Auto-pick** | Chooses clips for a target length. Clips already in the list are kept. |
-| **Vol (per clip)** | Volume of each clip in dB (0 = unchanged, negative = quieter, positive = louder). Changes blend smoothly at the transitions. |
-| **Master volume** | Volume of the whole output in dB. A limiter prevents clipping when boosting. |
-| **Start** | **Direct**, or **Fade in** over the seconds you set. |
-| **Ending** | Fade out over the seconds you set, or keep the song's real ending. |
+| **Snap** | Moves the clip edges to the nearest bar line, to the nearest beat, or to no grid (**Off**). |
+| **Sections** | The letters above the waveform show the song sections. The same letter shows similar music. |
+| **Clip buttons** | ▶ plays the clip one time. ⟳ plays the clip again and again. ↑ and ↓ change the play order. **+** adds a clip after the clip. ✕ removes the clip. |
+| **Vol** | Changes the volume of one clip, in dB. 0 dB is the original volume. |
+| **Transition preset** | Sets the blend and the effects with one selection. |
+| **Blend** | **Crossfade**: a short fade into the first beat of the next clip. **DJ bass swap**: the high frequencies blend, and the bass changes on the beat. **Overlay**: the next clip starts under the end of the previous clip. |
+| **Length** | The length of the blend, in beats. 4 beats are 1 bar. |
+| **Effects** | **Riser**: a noise sound that increases into the next clip. **Swell**: a reverse reverb into the next clip. **Echo**: echoes of the last beat of the previous clip. **Sweep**: removes the bass before the transition. |
+| **FX vol** | The volume of the effects, in percent. 100 % is the normal volume. |
+| **Auto-pick** | Selects clips for a target length. The tool keeps the clips that are in the list. |
+| **Fade in**, **Fade out** | Select the checkbox to fade the start or the end of the output. Type the fade length in seconds. If **Fade out** is off, the output stops at the end of the last clip. |
+| **Master volume** | Changes the volume of the full output, in dB. A limiter prevents clipping. |
+| **⟳** (result) | Plays the result again and again. |
+| **Save to** | The output folder. Click **Browse** to select a folder, or type the path. The tool does not overwrite a file. It adds a number to the new file name. |
 
 ## Command line
 
+The command line makes an edit without the editor window.
+
+Make a 90-second edit. The tool selects the clips:
+
 ```bash
-# ~1:30 version, chosen automatically
 uv run audio-editor-tool song.mp3 -l 1:30
-
-# Must include 1:05–1:40, leave out 2:10–2:30
-uv run audio-editor-tool song.mp3 -l 2:00 -k 1:05-1:40 -s 2:10-2:30 -o edit.mp3
-
-# Your own parts, with echo + swell at the joins and a fade-out
-uv run audio-editor-tool song.mp3 -p 1:41-1:58,2:25-2:44 --fx echo,swell --end fade
-
-# Same, with clip 2 at -3 dB, whole output -1 dB and a 2 s fade-in
-uv run audio-editor-tool song.mp3 -p 1:41-1:58,2:25-2:44 --gains 0,-3 --master-gain -1 --fade-in 2 --fx echo,swell --end fade
-
-# Show the section map
-uv run audio-editor-tool song.mp3 --analyze
 ```
 
-Run `uv run audio-editor-tool --help` for all options: `--blend crossfade|eq|overlay`, `--xfade BEATS`, `--fx riser,swell,echo,sweep`, `--gains 0,-3,2` (dB per part), `--master-gain DB`, `--fade-in SEC`, `--start`, `--end`, `--snap`, `--fade-out`, `--tolerance`, `--plan-json` and more.
+Make an edit from two clips, with echo and swell effects and a fade-out:
 
-## How it works
-
-1. **Beats and bars**: librosa beat tracking. The downbeat is the beat with the strongest bass and chord changes, and the bar grid is extended over quiet intros and outros.
-2. **Bar similarity**: harmony (per-beat chroma), timbre (MFCC) and loudness for every bar. This gives the section map and scores how seamless each possible cut is.
-3. **Auto-pick**: dynamic programming over bars. It prefers phrase-aligned skips (multiples of 4 or 8 bars), cutting whole sections, few cuts, and choruses. Required parts are never skipped.
-4. **Rendering**: cuts snap to the drum hit. Blends and effects are timed to the song's real beat grid, and a peak limiter prevents clipping.
-
-## Project layout
-
-```
-src/audio_editor_tool/
-  analysis.py   beats, bars, similarity, sections
-  planner.py    automatic clip selection
-  render.py     joining clips, blends, limiter
-  fx.py         riser, swell, echo, sweep
-  gui.py        local server for the editor window
-  web/index.html  editor UI
-  cli.py        command line
-examples/make_demo_song.py   synthetic test song
-Start-Audio-Editor.bat       Windows double-click launcher
-tests/                       pytest suite (uv run pytest)
+```bash
+uv run audio-editor-tool song.mp3 -p 0:30-1:00,2:00-2:30 --fx echo,swell --end fade
 ```
 
-## Limitations
+To see all the options, run `uv run audio-editor-tool --help`.
 
-- Works best with a steady tempo and 4/4 time.
-- Lyrics aren't understood: listen to the preview to check where vocal lines get cut.
-- Clips must come from one song at a time.
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| PowerShell does not find `uv`, `git`, or `ffmpeg`. | Open a new PowerShell window. If the problem continues, restart the computer. |
+| PowerShell does not find `winget`. | Install **App Installer** from the Microsoft Store. |
+| The editor does not start because the port is in use. | Close the other editor window. Or run `uv run audio-editor-tool-gui --port 8766`. |
+| **Browse** does not open a folder dialog. | Type the folder path in **Save to**. |
+| The tool cannot save an MP3 file. | Install ffmpeg. Then start the editor again. |
+
+## Update
+
+Run these commands in the tool folder:
+
+```bash
+git pull
+uv sync
+```
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+## Limits
+
+- The tool gives the best results with a constant tempo and 4/4 time.
+- The tool does not recognize lyrics. Listen to the preview to find cut vocal lines.
+- All clips in one edit come from one song.
 
 ## License
 

@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import shutil
 import threading
 import urllib.request
 from pathlib import Path
@@ -98,12 +99,24 @@ def test_gui_server_round_trip(demo):
         body = json.dumps({"id": song["id"], "clips": [[7.9, 23.6], [55.1, 70.8], [86.6, 102.3]],
                            "joins": [{"blend": "crossfade", "beats": 0.5, "fx": ["echo", "swell"]},
                                      {"blend": "eq", "beats": 4, "fx": ["riser"]}],
-                           "gains": [0, -3, 2], "master_db": -1, "fade_in": 1,
-                           "ending": "fade"}).encode()
+                           "gains": [0, -3, 2], "master_db": -1, "fade_in_on": True, "fade_in": 1,
+                           "fade_out_on": True, "fade_out": 3}).encode()
         res = post("/api/render", body, {"Content-Type": "application/json"})
         assert len(res["cuts"]) == 2 and res["duration"] > 40
         wav = urllib.request.urlopen(f"{base}/api/result/{res['rid']}?format=wav").read()
         assert wav[:4] == b"RIFF"
+        # save into a chosen folder; a second save must not overwrite the first
+        folder = path.parent / "out"
+        folder.mkdir()
+        body = {"rid": res["rid"], "folder": str(folder), "name": "my edit", "format": "wav"}
+        first = post("/api/save", json.dumps(body).encode(), {"Content-Type": "application/json"})
+        second = post("/api/save", json.dumps(body).encode(), {"Content-Type": "application/json"})
+        assert Path(first["path"]).name == "my edit.wav"
+        assert Path(second["path"]).name == "my edit (2).wav"
+        if shutil.which("ffmpeg"):
+            body["format"] = "mp3"
+            mp3 = post("/api/save", json.dumps(body).encode(), {"Content-Type": "application/json"})
+            assert Path(mp3["path"]).stat().st_size > 10_000
     finally:
         server.shutdown()
 
@@ -144,3 +157,21 @@ def test_cli_gain_and_fade_in(demo, tmp_path):
                      "-o", str(out)]) == 0
     audio, sr = audio_io.load(out)
     assert np.abs(audio[:, :50]).max() < 0.01
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_save_mp3(tmp_path):
+    """MP3 export goes through a temporary WAV; this failed on Windows before."""
+    sr = 44100
+    tone = 0.3 * np.sin(2 * np.pi * 440 * np.arange(sr) / sr).astype(np.float32)
+    out = tmp_path / "tone.mp3"
+    audio_io.save(out, np.stack([tone, tone]), sr)
+    back, _ = audio_io.load(out)
+    assert abs(back.shape[1] / sr - 1.0) < 0.1
+
+
+def test_fade_out_off_ends_at_clip_end(demo):
+    _, audio, sr, a = demo
+    out, _ = render_parts(audio, sr, [(23.6, 39.3)], [], natural_end=True, fade_out_s=0)
+    assert abs(out.shape[1] / sr - 15.7) < 0.01
+    assert np.abs(out[:, -int(0.5 * sr):-int(0.1 * sr)]).max() > 0.05   # not faded

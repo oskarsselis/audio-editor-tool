@@ -112,12 +112,15 @@ def render(req: dict) -> dict:
                                 fx_level=float(j.get("fx_level", 1.0))))
     while len(trans) < len(times) - 1:
         trans.append(Transition(fx=["echo", "swell"]))
-    ending = req.get("ending", "fade")
-    natural = ending == "natural" and times[-1][1] >= a.duration - 0.05
+    # Fade-out off: the output ends where the last clip ends (the song's own ending
+    # if the clip reaches it).
+    fade_out = float(req.get("fade_out", 4.0)) if req.get("fade_out_on", True) else 0.0
+    natural = fade_out <= 0
+    fade_in = float(req.get("fade_in", 0.0)) if req.get("fade_in_on", True) else 0.0
     out, cuts = render_parts(audio, sr, times, trans, natural_end=natural,
-                             fade_out_s=float(req.get("fade_out", 4.0)),
+                             fade_out_s=fade_out,
                              beat_s=_local_beat(a, times[0][1]),
-                             fade_in_s=float(req.get("fade_in", 0.0)),
+                             fade_in_s=fade_in,
                              gains_db=[float(x) for x in req.get("gains", [])],
                              master_db=float(req.get("master_db", 0.0)))
     rid = uuid.uuid4().hex[:10]
@@ -126,6 +129,76 @@ def render(req: dict) -> dict:
     RESULTS[rid] = {"wav": wav, "audio": out, "sr": sr, "name": Path(song["name"]).stem}
     return {"rid": rid, "duration": out.shape[1] / sr, "cuts": cuts, "peaks": _peaks(out),
             "clips": [[t0, t1] for t0, t1 in times], "natural_end": natural}
+
+
+BROWSE_SCRIPT = r"""
+import sys, tkinter as tk
+from tkinter import filedialog
+root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
+folder = filedialog.askdirectory(initialdir=sys.argv[1] or None, mustexist=True,
+                                 title="Choose the output folder")
+print(folder or "")
+"""
+
+
+def default_folder() -> str:
+    home = Path.home()
+    for name in ("Music", "Downloads", "Documents"):
+        if (home / name).is_dir():
+            return str(home / name)
+    return str(home)
+
+
+def browse(req: dict) -> dict:
+    """Open a system folder dialog. Tries tkinter, then the OS's own dialog.
+
+    Runs in a separate process so it works from the server thread on every OS.
+    Returns {"folder": ""} when the user cancels.
+    """
+    start = req.get("folder") or default_folder()
+    attempts = [[sys.executable, "-c", BROWSE_SCRIPT, start]]
+    if os.name == "nt":
+        ps = ("Add-Type -AssemblyName System.Windows.Forms;"
+              "$f = New-Object System.Windows.Forms.FolderBrowserDialog;"
+              "$f.Description = 'Choose the output folder';"
+              f"$f.SelectedPath = '{start.replace(chr(39), chr(39) * 2)}';"
+              "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }")
+        attempts.append(["powershell", "-NoProfile", "-STA", "-Command", ps])
+    elif sys.platform == "darwin":
+        attempts.append(["osascript", "-e",
+                         'POSIX path of (choose folder with prompt "Choose the output folder")'])
+    for cmd in attempts:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0:
+            return {"folder": r.stdout.strip()}
+        if sys.platform == "darwin" and cmd[0] == "osascript" and "-128" in r.stderr:
+            return {"folder": ""}                # user cancelled
+    raise RuntimeError("Could not open the folder dialog. Type the folder path instead.")
+
+
+def save(req: dict) -> dict:
+    """Save the rendered result to a folder the user chose."""
+    rid, fmt = req.get("rid"), req.get("format", "mp3")
+    if rid not in RESULTS:
+        raise ValueError("Render a preview first.")
+    if fmt not in ("mp3", "wav", "flac"):
+        raise ValueError(f"Unknown format: {fmt}")
+    folder = Path(os.path.expanduser(str(req.get("folder") or default_folder())))
+    if not folder.is_dir():
+        raise ValueError(f"Folder not found: {folder}")
+    stem = "".join(c for c in str(req.get("name") or "") if c not in '<>:"/\\|?*').strip()
+    stem = stem or f"{RESULTS[rid]['name']}_edit"
+    path = folder / f"{stem}.{fmt}"
+    n = 2
+    while path.exists():                      # never overwrite: "name (2).mp3", ...
+        path = folder / f"{stem} ({n}).{fmt}"
+        n += 1
+    r = RESULTS[rid]
+    audio_io.save(path, r["audio"], r["sr"])
+    return {"path": str(path)}
 
 
 def export(rid: str, fmt: str) -> Path:
@@ -160,6 +233,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in ("/", "/index.html"):
             html = resources.files("audio_editor_tool").joinpath("web/index.html").read_bytes()
             return self._send(html, "text/html; charset=utf-8")
+        if url.path == "/api/config":
+            return self._json({"folder": default_folder()})
         if url.path.startswith("/api/result/"):
             rid = url.path.rsplit("/", 1)[-1]
             fmt = parse_qs(url.query).get("format", ["wav"])[0]
@@ -187,6 +262,10 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     return self._json(load_song(body, name))
             req = json.loads(body or b"{}")
+            if url.path == "/api/browse":
+                return self._json(browse(req))
+            if url.path == "/api/save":
+                return self._json(save(req))
             if req.get("id") not in SONGS:
                 return self._json({"error": "Open a song first."}, HTTPStatus.BAD_REQUEST)
             if url.path == "/api/suggest":
