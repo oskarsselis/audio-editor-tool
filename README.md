@@ -1,78 +1,95 @@
-# song-shortener
+# Song Shortener
 
-Make a shorter edit of a song: give a target length and (optionally) the parts that must stay. The tool finds bars and phrases, picks cut points where the music lines up, and joins them with beat-aligned crossfades, so the edit sounds like it was meant that way.
+Make short edits of a song with smooth, beat-matched transitions. Pick the parts you want in a visual editor (or let the tool pick them for a target length). It joins them on the beat with crossfades and DJ-style transition effects.
+
+![Editor window](docs/screenshot.png)
 
 ## Install
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+. Install `ffmpeg` to read and write MP3, M4A and similar formats. WAV, FLAC and OGG work without it.
+Requirements:
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- Python 3.12+ (uv can install it for you)
+- [ffmpeg](https://ffmpeg.org/download.html) (optional) to read and export MP3/M4A. WAV, FLAC and OGG work without it.
 
 ```bash
+git clone https://github.com/<your-user>/song-shortener.git
+cd song-shortener
 uv sync
 ```
 
-## Usage
+## Editor window
 
 ```bash
-# ~1:30 version
-uv run song-shortener song.mp3 -l 1:30
-
-# Must include 1:05–1:40 (e.g. the guitar solo) and leave out 2:10–2:30
-uv run song-shortener song.mp3 -l 2:00 -k 1:05-1:40 -s 2:10-2:30 -o edit.mp3
-
-# See the song's sections first, to help choose --keep ranges
-uv run song-shortener song.mp3 --analyze
+uv run song-shortener-gui
 ```
 
-Example output:
+This opens the editor in its own window. It uses Chrome/Edge app mode if one is installed, and otherwise your default browser. Everything runs locally on your computer.
 
-```
-Edit (3 parts):
-    0:00.0  plays original 0:00.0 - 0:07.9  -> transition match 89%
-    0:07.6  plays original 0:15.7 - 0:55.1  -> transition match 96%
-    0:46.7  plays original 1:26.6 - 1:42.3
-  ending: 4s fade-out
-```
+1. Open or drop an audio file. The tool detects beats, bars and sections (same letter = similar music, e.g. choruses).
+2. Add clips: drag on the waveform, or type start/end times. You can use as many clips as you like, from any part of the song, in any order.
+3. Set each transition: pick a preset, or choose the blend, its length and effects yourself.
+4. Choose the ending, then click **Render preview**, listen, and download MP3/WAV/FLAC.
 
 ### Options
 
-| Option | Default | Meaning |
-|---|---|---|
-| `-l, --length` | – | Target length (`90`, `1:30`). Approximate: cuts stay on whole phrases. |
-| `-k, --keep START-END` | – | Part that must be included. Repeatable. |
-| `-s, --skip START-END` | – | Part that must be left out. Repeatable. |
-| `-o, --output` | `<input>_short.<ext>` | Output file. |
-| `--start intro\|any` | `intro` | `any` lets the edit start later, at a section start. |
-| `--end auto\|outro\|fade` | `auto` | Keep the real ending, fade out, or let the tool choose. |
-| `-p, --parts A-B,C-D` | – | Choose the parts yourself instead of `-l`. Edges snap to bars. |
-| `--snap bar\|beat\|none` | `bar` | Snapping for `--parts` edges. |
-| `--xfade BEATS` | `0.5` | Crossfade length in beats (4 = one bar in 4/4). |
-| `--blend crossfade\|eq\|overlay` | `crossfade` | `eq` is a DJ-style bass swap: mids and highs blend, and the bass hands over on the downbeat. `overlay` starts the next part at full volume underneath the end of the previous one, and `--xfade` sets the overlap. |
-| `--fx riser,swell,echo,sweep` | – | Transition effects at each join: `riser` (noise sweep up to the next downbeat), `swell` (reverse reverb of the next part's first hit), `echo` (tempo-synced echoes of the last beat), `sweep` (high-pass filter drains the bass in the last bar). Combine them with commas. |
-| `--hold 0-1` | `0.5` | For overlay: the share of the overlap where the previous part stays at full volume before fading. |
-| `--blend-pos before\|center\|after` | `before` | Where the blend sits: `before` lets the new part's downbeat hit at full volume, and `after` lets the old part's tail (e.g. a held vocal) carry over. |
-| `--fade-out SEC` | `4` | Fade-out length when the real ending isn't used. |
-| `--min-segment BARS` | `4` | Shortest piece between two cuts. |
-| `--tolerance SEC` | `4` | How far the length may drift from the target. |
-| `--analyze` | – | Print only the section map. |
-| `--plan-json FILE` | – | Save the chosen cuts as JSON. |
+| Option | What it does |
+|---|---|
+| **Snap: Bar / Beat / Off** | Clip edges lock to bar lines (smoothest), beats, or nothing. |
+| **Clips** | Drag to add, move or resize. Edit times directly. Use ▶ to play a clip, ↑ ↓ to change the order and ✕ to delete one. **Sort by time** puts clips in song order. |
+| **Transition preset** | **Smooth (echo + swell)** (default), **Clean cut**, **Build-up (sweep + riser)**, **DJ blend (bass swap)**, **Overlay**. |
+| **Blend** | **Crossfade**: short fade that lands on the next downbeat. **DJ bass swap**: highs blend while the bass switches on the beat. **Overlay**: the next clip starts underneath the end of the previous one. |
+| **Length** | Blend length in beats (4 = one bar). |
+| **Effects** | **Riser**: a noise sweep that builds up. **Swell**: reverse reverb into the next clip. **Echo**: echoes of the last beat. **Sweep**: drains the bass before the cut. Combine them freely. **FX vol** sets their volume. |
+| **Auto-pick** | Chooses clips for a target length. Clips already in the list are kept. |
+| **Ending / Fade in** | Fade out (any length) or keep the song's real ending. Optional fade in. |
+
+## Command line
+
+```bash
+# ~1:30 version, chosen automatically
+uv run song-shortener song.mp3 -l 1:30
+
+# Must include 1:05–1:40, leave out 2:10–2:30
+uv run song-shortener song.mp3 -l 2:00 -k 1:05-1:40 -s 2:10-2:30 -o edit.mp3
+
+# Your own parts, with echo + swell at the joins and a fade-out
+uv run song-shortener song.mp3 -p 1:41-1:58,2:25-2:44 --fx echo,swell --end fade
+
+# Show the section map
+uv run song-shortener song.mp3 --analyze
+```
+
+Run `uv run song-shortener --help` for all options: `--blend crossfade|eq|overlay`, `--xfade BEATS`, `--fx riser,swell,echo,sweep`, `--start`, `--end`, `--snap`, `--fade-out`, `--tolerance`, `--plan-json` and more.
 
 ## How it works
 
-1. **Beats and bars:** librosa beat tracking. The downbeat is the beat with the strongest bass hits and chord changes. The bar grid is extended over quiet intros and outros.
-2. **Bar similarity:** harmony (per-beat chroma), timbre (MFCC) and loudness for every bar.
-3. **Planning:** dynamic programming over bars. Each jump from bar *i* to bar *j* is scored by how much bar *j* sounds like the bar it replaces (*i+1*). It prefers phrase-aligned skips (multiples of 4 or 8 bars), cutting whole sections, few cuts, and loud, repeated parts (choruses). Required parts are never skipped, and the length stays near the target.
-4. **Rendering:** cuts snap to the drum hit. An equal-power crossfade runs just *before* the downbeat, so the new part's downbeat lands at full volume. Without the real ending, the edit fades out.
+1. **Beats and bars**: librosa beat tracking. The downbeat is the beat with the strongest bass and chord changes, and the bar grid is extended over quiet intros and outros.
+2. **Bar similarity**: harmony (per-beat chroma), timbre (MFCC) and loudness for every bar. This gives the section map and scores how seamless each possible cut is.
+3. **Auto-pick**: dynamic programming over bars. It prefers phrase-aligned skips (multiples of 4 or 8 bars), cutting whole sections, few cuts, and choruses. Required parts are never skipped.
+4. **Rendering**: cuts snap to the drum hit. Blends and effects are timed to the song's real beat grid, and a peak limiter prevents clipping.
+
+## Project layout
+
+```
+src/song_shortener/
+  analysis.py   beats, bars, similarity, sections
+  planner.py    automatic clip selection
+  render.py     joining clips, blends, limiter
+  fx.py         riser, swell, echo, sweep
+  gui.py        local server for the editor window
+  web/index.html  editor UI
+  cli.py        command line
+examples/make_demo_song.py   synthetic test song
+tests/                       pytest suite (uv run pytest)
+```
 
 ## Limitations
 
-- Works best with a steady tempo and 4/4 time. Rubato, tempo changes or 3/4 time can give odd cuts.
-- Lengths land on whole phrases, so the result can be a few seconds off the target. Use `--tolerance` to tighten or loosen this.
-- Lyrics aren't understood. A cut can join two choruses with different words.
+- Works best with a steady tempo and 4/4 time.
+- Lyrics aren't understood: listen to the preview to check where vocal lines get cut.
+- Clips must come from one song at a time.
 
-## Demo
+## License
 
-```bash
-uv run python examples/make_demo_song.py demo.wav   # synthetic song with known sections
-uv run song-shortener demo.wav --analyze
-uv run song-shortener demo.wav -l 60
-```
+MIT

@@ -16,3 +16,4 @@ wheels/
 *.m4a
 *.ogg
 test_run/
+.pytest_cache/

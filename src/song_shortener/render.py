@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import numpy as np
 
 from .analysis import Analysis
@@ -103,52 +105,80 @@ def _limit(x: np.ndarray, sr: int, ceiling: float = 0.98) -> np.ndarray:
     return (x * gain).astype(np.float32)
 
 
+@dataclass
+class Transition:
+    """How one part flows into the next."""
+    blend: str = "crossfade"            # crossfade | eq | overlay
+    xfade_s: float = 0.25               # blend / overlap length in seconds
+    position: str = "before"            # before | center | after (not used by overlay)
+    hold: float = 0.5                   # overlay: share of overlap at full volume
+    fx: list[str] = field(default_factory=list)   # riser, swell, echo, sweep
+    fx_level: float = 1.0               # effect volume multiplier
+
+
 def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural_end: bool,
            xfade_s: float | list[float], fade_out_s: float, blend: str = "crossfade",
            position: str = "before", hold: float = 0.5,
            fx: list[str] | None = None, beat_s: float | None = None) -> np.ndarray:
-    """Join parts. position: where the blend sits relative to the cut —
-    'before' (new part's downbeat hits at full volume), 'center', or 'after'
-    (old part's tail, e.g. a held vocal, rings over the new part's start)."""
+    """Same settings for every join (CLI). See render_parts for per-join settings."""
     n = len(times)
-    Ls = [max(1, int(x * sr)) for x in (xfade_s if isinstance(xfade_s, list) else [xfade_s] * n)]
-    if blend == "overlay":       # new part starts under the old part's last L samples
-        position = "before"
-    f = {"before": 1.0, "center": 0.5, "after": 0.0}[position]
-    pieces = []
+    xs = xfade_s if isinstance(xfade_s, list) else [xfade_s] * n
+    trans = [Transition(blend, xs[i], position, hold, list(fx or [])) for i in range(n - 1)]
+    out, _ = render_parts(audio, sr, times, trans, natural_end, fade_out_s, beat_s)
+    return out
+
+
+def render_parts(audio: np.ndarray, sr: int, times: list[tuple[float, float]],
+                 transitions: list[Transition], natural_end: bool, fade_out_s: float,
+                 beat_s: float | None = None, fade_in_s: float = 0.0
+                 ) -> tuple[np.ndarray, list[float]]:
+    """Join parts with per-join settings. Returns (audio, cut times in the output in s)."""
+    n = len(times)
+    pieces: list[np.ndarray] = []
     joins = []                     # (cut in output, outgoing end, incoming start) in samples
     length = 0
+    skip_in = 0                    # samples of the next part already used by the blend
     for idx, (t0, t1) in enumerate(times):
-        L = Ls[min(idx, len(Ls) - 1)]
-        pre, post = int(round(f * L)), L - int(round(f * L))
-        prev_L = Ls[idx - 1] if idx > 0 else 0
-        prev_post = prev_L - int(round(f * prev_L))
         s, e = int(t0 * sr), int(t1 * sr)
-        a = s + (prev_post if idx > 0 else 0) + (prev_L if idx > 0 and blend == "overlay" else 0)
-        b = e - (pre if idx < n - 1 else 0)
-        pieces.append(audio[:, a:b])
-        length += pieces[-1].shape[1]
-        if idx < n - 1:
-            nb = int(times[idx + 1][0] * sr)
-            xa = audio[:, e - pre:e + post]
-            if blend == "overlay":
-                xb = audio[:, nb:nb + L]
-                m = min(xa.shape[1], xb.shape[1])
-                pieces.append(_overlay(xa[:, :m], xb[:, :m], sr, hold))
-                joins.append((length, e, nb))
-                length += m
-                continue
-            xb = audio[:, nb - pre:nb + post]
+        if idx == n - 1:
+            pieces.append(audio[:, s + skip_in:e])
+            length += pieces[-1].shape[1]
+            break
+        tr = transitions[idx]
+        L = max(1, int(tr.xfade_s * sr))
+        nb = int(times[idx + 1][0] * sr)
+        if tr.blend == "overlay":
+            pre, post = L, 0
+        else:
+            f = {"before": 1.0, "center": 0.5, "after": 0.0}[tr.position]
+            pre, post = int(round(f * L)), L - int(round(f * L))
+        body = audio[:, s + skip_in:max(s + skip_in, e - pre)]
+        pieces.append(body)
+        length += body.shape[1]
+        xa = audio[:, e - pre:e + post]
+        if tr.blend == "overlay":
+            xb = audio[:, nb:nb + L]
             m = min(xa.shape[1], xb.shape[1])
-            pieces.append(_blend(xa[:, :m], xb[:, :m], pre, sr, blend))
-            joins.append((length + pre, e, nb))
-            length += m
+            mix = _overlay(xa[:, :m], xb[:, :m], sr, tr.hold)
+            joins.append((length, e, nb, tr))
+            skip_in = m
+        else:
+            xb = audio[:, max(0, nb - pre):nb + post]
+            m = min(xa.shape[1], xb.shape[1])
+            mix = _blend(xa[:, :m], xb[:, :m], min(pre, m), sr, tr.blend)
+            joins.append((length + pre, e, nb, tr))
+            skip_in = post
+        pieces.append(mix)
+        length += mix.shape[1]
     out = np.concatenate(pieces, axis=1).astype(np.float32)
-    if fx:
+    if any(j[3].fx for j in joins):
         from .fx import apply
-        out = apply(out, audio, sr, joins, beat_s, fx)
+        out = apply(out, audio, sr, joins, beat_s or 0.5)
 
-    if times[0][0] > 0:                          # started mid-song: avoid a click
+    if fade_in_s > 0:
+        r = min(int(fade_in_s * sr), out.shape[1])
+        out[:, :r] *= np.sin(np.linspace(0, np.pi / 2, r, dtype=np.float32)) ** 2
+    elif times[0][0] > 0:                        # started mid-song: avoid a click
         r = min(int(0.01 * sr), out.shape[1])
         out[:, :r] *= np.linspace(0, 1, r, dtype=np.float32)
     if not natural_end:
@@ -157,4 +187,4 @@ def render(audio: np.ndarray, sr: int, times: list[tuple[float, float]], natural
     else:
         r = min(int(0.01 * sr), out.shape[1])
         out[:, -r:] *= np.linspace(1, 0, r, dtype=np.float32)
-    return _limit(out, sr)
+    return _limit(out, sr), [j[0] / sr for j in joins]

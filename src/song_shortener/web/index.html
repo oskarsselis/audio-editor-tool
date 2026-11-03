@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Song Shortener</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e6e8ee; --muted: #8a92a6; --accent: #5b8cff; --accent2: #3d6ef0;
+    --good: #3fbf7f; --warn: #f0b429; --bad: #ef5b5b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 18px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 17px; margin: 0 8px 0 0; letter-spacing: .2px; }
+  header .info { color: var(--muted); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  button, select, input { font: inherit; color: var(--text); }
+  button { background: var(--panel2); border: 1px solid var(--line); border-radius: 7px;
+           padding: 6px 12px; cursor: pointer; }
+  button:hover { border-color: #3b4252; background: #232835; }
+  button.primary { background: var(--accent2); border-color: var(--accent2); font-weight: 600; }
+  button.primary:hover { background: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.icon { padding: 4px 8px; min-width: 30px; }
+  select, input[type=number], input[type=text] { background: var(--bg); border: 1px solid var(--line);
+           border-radius: 6px; padding: 5px 7px; }
+  input[type=number] { width: 70px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: var(--bg); padding: 5px 10px; }
+  .seg button.on { background: var(--accent2); }
+  main { padding: 14px 18px 30px; display: grid; gap: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+              margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .panel h2 .grow { flex: 1; }
+  .wave-wrap { position: relative; user-select: none; }
+  canvas { display: block; width: 100%; }
+  #srcCanvas { cursor: crosshair; height: 190px; }
+  #resCanvas { cursor: pointer; height: 110px; }
+  .transport { display: flex; align-items: center; gap: 10px; margin-top: 8px; color: var(--muted); }
+  .transport .time { font-variant-numeric: tabular-nums; color: var(--text); min-width: 120px; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr); gap: 14px; align-items: start; }
+  .clip { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center;
+          background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+  .clip.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .badge { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center;
+           font-weight: 700; color: #0f1115; }
+  .clip .times { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .clip .times input { width: 78px; }
+  .clip .len { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 4px; }
+  .clip .btns { display: flex; gap: 4px; }
+  .join { margin: 4px 0 4px 36px; padding: 8px 10px; border-left: 2px dashed var(--line);
+          display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; }
+  .join label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .chip { border-radius: 999px; padding: 3px 10px; font-size: 12.5px; background: var(--bg); }
+  .chip.on { background: #2a3b66; border-color: var(--accent); color: #dfe7ff; }
+  .empty { color: var(--muted); padding: 18px; text-align: center; border: 1px dashed var(--line); border-radius: 9px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .row label { color: var(--muted); }
+  .divider { height: 1px; background: var(--line); margin: 12px 0; }
+  .stat { font-size: 13px; color: var(--muted); }
+  .stat b { color: var(--text); font-variant-numeric: tabular-nums; }
+  audio { width: 100%; margin-top: 8px; height: 36px; }
+  #overlay { position: fixed; inset: 0; background: rgba(8,10,14,.72); display: none;
+             align-items: center; justify-content: center; z-index: 10; }
+  #overlay.show { display: flex; }
+  .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #39404f;
+             border-top-color: var(--accent); animation: spin .8s linear infinite; margin: 0 auto 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 30px; text-align: center; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #3a1f24;
+           border: 1px solid var(--bad); padding: 8px 14px; border-radius: 8px; display: none; z-index: 11; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 40px; text-align: center; color: var(--muted); }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 Song Shortener</h1>
+  <button class="primary" id="openBtn">Open audio…</button>
+  <input type="file" id="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a" hidden>
+  <div class="info" id="info">No song loaded</div>
+  <label class="hint">Snap</label>
+  <div class="seg" id="snapSeg">
+    <button data-v="bar" class="on">Bar</button><button data-v="beat">Beat</button><button data-v="none">Off</button>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Source <span class="grow"></span><span class="hint" style="text-transform:none;letter-spacing:0">
+      Drag on the waveform to add a clip · drag a clip to move · drag its edges to resize · click to set the playhead · Del removes the selected clip</span></h2>
+    <div id="dropZone" class="drop">Drop an audio file here or click <b>Open audio…</b></div>
+    <div class="wave-wrap" id="srcWrap" style="display:none">
+      <canvas id="srcCanvas"></canvas>
+    </div>
+    <div class="transport" id="srcTransport" style="display:none">
+      <button id="playSrc" class="icon" title="Play / pause (Space)">▶</button>
+      <span class="time" id="srcTime">0:00.0</span>
+      <span class="hint">Sections: same letter = similar music (e.g. choruses).</span>
+    </div>
+    <audio id="srcAudio" hidden></audio>
+  </section>
+
+  <div class="cols">
+    <section class="panel">
+      <h2>Clips &amp; transitions (play order)<span class="grow"></span>
+        <button id="sortBtn" title="Put clips in song order">Sort by time</button>
+        <button id="clearBtn">Clear</button></h2>
+      <div id="clipList"><div class="empty">No clips yet. Drag on the waveform, or use <b>Auto-pick</b>.</div></div>
+    </section>
+
+    <section class="panel">
+      <h2>Output</h2>
+      <div class="row">
+        <label>Auto-pick to</label>
+        <input type="number" id="target" value="30" min="5" step="1"> <span class="hint">s</span>
+        <button id="autoBtn" title="Let the tool choose clips. Existing clips are kept as must-include parts.">Auto-pick clips</button>
+      </div>
+      <div class="hint" style="margin:-4px 0 6px">Existing clips are treated as parts that must stay in.</div>
+      <div class="divider"></div>
+      <div class="row">
+        <label>Ending</label>
+        <div class="seg" id="endSeg"><button data-v="fade" class="on">Fade out</button><button data-v="natural">Original ending</button></div>
+        <label>fade</label><input type="number" id="fadeOut" value="4" min="0.5" step="0.5"><span class="hint">s</span>
+      </div>
+      <div class="row">
+        <label>Fade in</label><input type="number" id="fadeIn" value="0" min="0" step="0.5"><span class="hint">s</span>
+      </div>
+      <div class="row stat">Estimated length: <b id="estLen">–</b></div>
+      <div class="row">
+        <button class="primary" id="renderBtn" disabled>Render preview</button>
+        <span class="hint" id="renderHint"></span>
+      </div>
+      <div id="resultBox" style="display:none">
+        <div class="divider"></div>
+        <div class="row stat">Result: <b id="resLen"></b> <span id="resCuts"></span></div>
+        <div class="wave-wrap"><canvas id="resCanvas"></canvas></div>
+        <audio id="resAudio" controls></audio>
+        <div class="row" style="margin-top:10px">
+          <label>Download</label>
+          <button id="dlMp3">MP3</button><button id="dlWav">WAV</button><button id="dlFlac">FLAC</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div id="overlay"><div class="box"><div class="spinner"></div><div id="overlayMsg">Working…</div></div></div>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const COLORS = ["#5b8cff", "#3fbf7f", "#f0b429", "#e86fb6", "#4fc3d9", "#b28dff", "#ff8a5b", "#9ccc65"];
+const SECTION_COLORS = ["#2b3550", "#2d4a3e", "#4a3f22", "#4a2a3f", "#24464d", "#3a3354", "#4d3326", "#3b4a2a"];
+const FX = [["riser", "Riser", "Noise sweep rising into the next part"],
+            ["swell", "Swell", "Reverse reverb of the next part's first hit"],
+            ["echo", "Echo", "Tempo-synced echoes of the previous part's last beat"],
+            ["sweep", "Sweep", "Drain the bass from the previous part in its last bar"]];
+const PRESETS = {
+  smooth:  {label: "Smooth (echo + swell)", blend: "crossfade", beats: 0.5, fx: ["echo", "swell"]},
+  clean:   {label: "Clean cut", blend: "crossfade", beats: 0.5, fx: []},
+  riser:   {label: "Build-up (sweep + riser)", blend: "crossfade", beats: 0.5, fx: ["sweep", "riser"]},
+  dj:      {label: "DJ blend (bass swap)", blend: "eq", beats: 8, fx: []},
+  overlay: {label: "Overlay (start on top)", blend: "overlay", beats: 4, fx: []},
+};
+const S = { song: null, clips: [], joins: [], sel: -1, snap: "bar", ending: "fade", result: null };
+
+function fmt(t) { if (!isFinite(t)) return "–"; const m = Math.floor(t / 60), s = t - 60 * m;
+  return `${m}:${s.toFixed(1).padStart(4, "0")}`; }
+function parseT(v) { v = String(v).trim(); let t = 0; for (const p of v.split(":")) t = t * 60 + parseFloat(p || 0); return t; }
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 4500); }
+function busy(msg) { $("#overlayMsg").textContent = msg; $("#overlay").classList.toggle("show", !!msg); }
+async function api(path, body, raw) {
+  const r = await fetch(path, raw ? body : { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+function newJoin() { const p = PRESETS.smooth; return { preset: "smooth", blend: p.blend, beats: p.beats, fx: [...p.fx], fx_level: 1 }; }
+function syncJoins() { while (S.joins.length < S.clips.length - 1) S.joins.push(newJoin()); S.joins.length = Math.max(0, S.clips.length - 1); }
+
+// ---------- snapping ----------
+function snapT(t) {
+  if (!S.song || S.snap === "none") return Math.max(0, Math.min(S.song ? S.song.duration : t, t));
+  const grid = S.snap === "bar" ? S.song.bars : S.song.beats;
+  let best = grid[0], d = Infinity;
+  for (const g of grid) { const e = Math.abs(g - t); if (e < d) { d = e; best = g; } }
+  if (t < 0.3) return 0;
+  if (S.song.duration - t < 0.3) return S.song.duration;
+  return best;
+}
+
+// ---------- waveform drawing ----------
+function setupCanvas(c) { const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); return [g, r.width, r.height]; }
+function drawPeaks(g, peaks, x0, w, y0, h, color) {
+  g.fillStyle = color; const n = peaks.length, mid = y0 + h / 2;
+  for (let px = 0; px < w; px++) {
+    const a = Math.floor(px / w * n), b = Math.max(a + 1, Math.floor((px + 1) / w * n));
+    let mn = 1, mx = -1; for (let i = a; i < b && i < n; i++) { mn = Math.min(mn, peaks[i][0]); mx = Math.max(mx, peaks[i][1]); }
+    g.fillRect(x0 + px, mid - mx * h / 2, 1, Math.max(1, (mx - mn) * h / 2));
+  }
+}
+const SEC_H = 22, RULER_H = 16;
+function drawSource() {
+  const c = $("#srcCanvas"); if (!S.song) return; const [g, W, H] = setupCanvas(c);
+  const D = S.song.duration, X = t => t / D * W, waveTop = SEC_H + 4, waveH = H - waveTop - RULER_H;
+  g.clearRect(0, 0, W, H);
+  // sections
+  const labels = [...new Set(S.song.sections.map(s => s.label))];
+  for (const s of S.song.sections) {
+    const x = X(s.start), w = X(s.end) - x, ci = labels.indexOf(s.label) % SECTION_COLORS.length;
+    g.fillStyle = SECTION_COLORS[ci]; g.fillRect(x + 1, 0, w - 2, SEC_H);
+    g.fillStyle = "#cfd6e6"; g.font = "600 11px system-ui"; if (w > 18) g.fillText(s.label, x + 6, 15);
+    g.fillStyle = "rgba(255,255,255,.35)"; const ew = Math.max(0, w - 30) * s.energy;
+    if (w > 40) g.fillRect(x + 22, 9, ew, 3);
+  }
+  // bar grid
+  g.fillStyle = "rgba(255,255,255,.05)";
+  for (const b of S.song.bars) g.fillRect(X(b), waveTop, 1, waveH);
+  // clips: tint, waveform (coloured inside clips), then borders and numbers on top
+  S.clips.forEach((cl, i) => {
+    const col = COLORS[i % COLORS.length];
+    g.fillStyle = col + (i === S.sel ? "38" : "1f"); g.fillRect(X(cl[0]), waveTop, X(cl[1]) - X(cl[0]), waveH);
+  });
+  drawPeaks(g, S.song.peaks, 0, W, waveTop, waveH, "#6f7f9e");
+  S.clips.forEach((cl, i) => {
+    const x = X(cl[0]), w = X(cl[1]) - x, col = COLORS[i % COLORS.length];
+    g.save(); g.beginPath(); g.rect(x, waveTop, w, waveH); g.clip();
+    drawPeaks(g, S.song.peaks, 0, W, waveTop, waveH, col); g.restore();
+  });
+  S.clips.forEach((cl, i) => {
+    const x = X(cl[0]), w = X(cl[1]) - x, col = COLORS[i % COLORS.length];
+    g.fillStyle = col; g.fillRect(x, waveTop, 2, waveH); g.fillRect(x + w - 2, waveTop, 2, waveH);
+    g.fillRect(x, waveTop, w, 3);
+    g.fillRect(x + 2, waveTop + 3, 20, 18);
+    g.font = "700 12px system-ui"; g.fillStyle = "#0f1115"; g.fillText(String(i + 1), x + 8, waveTop + 16);
+  });
+  // ruler
+  g.fillStyle = "#6b7387"; g.font = "11px system-ui";
+  const step = D > 240 ? 30 : D > 90 ? 15 : 5;
+  for (let t = 0; t < D; t += step) { const x = X(t); g.fillRect(x, H - RULER_H, 1, 4); g.fillText(fmt(t).replace(/\.\d$/, ""), x + 3, H - 3); }
+  // playhead
+  const a = $("#srcAudio"); g.fillStyle = "#fff"; g.fillRect(X(a.currentTime || 0), SEC_H, 1.5, H - SEC_H - RULER_H);
+}
+function drawResult() {
+  const r = S.result; if (!r) return; const c = $("#resCanvas"); const [g, W, H] = setupCanvas(c);
+  const D = r.duration, X = t => t / D * W; g.clearRect(0, 0, W, H);
+  const bounds = [0, ...r.cuts, D];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    g.fillStyle = COLORS[i % COLORS.length] + "14"; g.fillRect(X(bounds[i]), 0, X(bounds[i + 1]) - X(bounds[i]), H);
+    g.fillStyle = COLORS[i % COLORS.length]; g.fillRect(X(bounds[i]), 0, X(bounds[i + 1]) - X(bounds[i]), 3);
+  }
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const x = X(bounds[i]), w = X(bounds[i + 1]) - x;
+    g.save(); g.beginPath(); g.rect(x, 0, w, H); g.clip();
+    drawPeaks(g, r.peaks, 0, W, 6, H - 8, COLORS[i % COLORS.length]); g.restore();
+  }
+  for (const t of r.cuts) { g.fillStyle = "#f0b429"; g.fillRect(X(t) - 1, 0, 2, H); }
+  const a = $("#resAudio"); g.fillStyle = "#fff"; g.fillRect(X(a.currentTime || 0), 0, 1.5, H);
+}
+
+// ---------- source canvas interaction ----------
+let drag = null;
+function tAt(e) { const r = $("#srcCanvas").getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * S.song.duration; }
+function pxPerSec() { return $("#srcCanvas").getBoundingClientRect().width / S.song.duration; }
+$("#srcCanvas").addEventListener("mousedown", e => {
+  if (!S.song) return; const t = tAt(e), tol = 7 / pxPerSec();
+  for (let i = S.clips.length - 1; i >= 0; i--) {
+    const [a, b] = S.clips[i];
+    if (Math.abs(t - a) < tol) { drag = { mode: "l", i }; S.sel = i; return render(); }
+    if (Math.abs(t - b) < tol) { drag = { mode: "r", i }; S.sel = i; return render(); }
+  }
+  for (let i = S.clips.length - 1; i >= 0; i--) {
+    const [a, b] = S.clips[i];
+    if (t > a && t < b) { drag = { mode: "move", i, off: t - a, len: b - a, t0: t }; S.sel = i; return render(); }
+  }
+  drag = { mode: "new", start: t, x0: e.clientX };
+});
+window.addEventListener("mousemove", e => {
+  if (!drag || !S.song) return; const t = tAt(e);
+  if (drag.mode === "new") {
+    if (Math.abs(e.clientX - drag.x0) < 5) return;
+    S.clips.push([snapT(Math.min(drag.start, t)), snapT(Math.max(drag.start, t))]);
+    drag = { mode: Math.min(drag.start, t) === t ? "l" : "r", i: S.clips.length - 1, anchor: drag.start };
+    S.sel = drag.i; syncJoins();
+  } else if (drag.mode === "l") { const c = S.clips[drag.i]; c[0] = Math.min(snapT(t), c[1] - 0.2); }
+  else if (drag.mode === "r") { const c = S.clips[drag.i]; c[1] = Math.max(snapT(t), c[0] + 0.2); }
+  else if (drag.mode === "move") {
+    drag.moved = drag.moved || Math.abs(t - drag.t0) * pxPerSec() > 4;
+    if (!drag.moved) return;
+    let a = snapT(t - drag.off); a = Math.max(0, Math.min(S.song.duration - drag.len, a));
+    S.clips[drag.i] = [a, a + drag.len];
+  }
+  render();
+});
+window.addEventListener("mouseup", e => {
+  if (!drag) return;
+  if (drag.mode === "new" || (drag.mode === "move" && !drag.moved)) { $("#srcAudio").currentTime = tAt(e); }
+  drag = null; render();
+});
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if ((e.key === "Delete" || e.key === "Backspace") && S.sel >= 0) { removeClip(S.sel); e.preventDefault(); }
+  if (e.code === "Space" && S.song) { togglePlay(); e.preventDefault(); }
+});
+$("#resCanvas").addEventListener("mousedown", e => {
+  if (!S.result) return; const r = e.target.getBoundingClientRect();
+  $("#resAudio").currentTime = (e.clientX - r.left) / r.width * S.result.duration;
+});
+
+// ---------- clip list ----------
+function removeClip(i) { S.clips.splice(i, 1); S.joins.splice(Math.min(i, S.joins.length - 1), 1); S.sel = -1; syncJoins(); render(); }
+function moveClip(i, d) { const j = i + d; if (j < 0 || j >= S.clips.length) return;
+  [S.clips[i], S.clips[j]] = [S.clips[j], S.clips[i]]; S.sel = j; render(); }
+function joinLen(j) { const beat = S.song ? S.song.beat : 0.5; return j.blend === "overlay" ? j.beats * beat : 0; }
+function estimate() {
+  if (!S.clips.length) return NaN;
+  let t = S.clips.reduce((s, c) => s + c[1] - c[0], 0);
+  S.joins.forEach(j => t -= joinLen(j)); return t;
+}
+function renderList() {
+  const L = $("#clipList"); syncJoins();
+  if (!S.clips.length) { L.innerHTML = '<div class="empty">No clips yet. Drag on the waveform, or use <b>Auto-pick</b>.</div>'; return; }
+  L.innerHTML = "";
+  S.clips.forEach((c, i) => {
+    const col = COLORS[i % COLORS.length], d = document.createElement("div");
+    d.className = "clip" + (i === S.sel ? " sel" : "");
+    d.innerHTML = `<div class="badge" style="background:${col}">${i + 1}</div>
+      <div class="times"><input type="text" value="${fmt(c[0])}" data-k="0" title="Start (m:ss.s)"> →
+        <input type="text" value="${fmt(c[1])}" data-k="1" title="End (m:ss.s)"><span class="len">${(c[1] - c[0]).toFixed(1)} s</span></div>
+      <div class="btns"><button class="icon" data-a="play" title="Play this clip">▶</button>
+        <button class="icon" data-a="up" title="Move earlier">↑</button><button class="icon" data-a="down" title="Move later">↓</button>
+        <button class="icon" data-a="del" title="Remove">✕</button></div>`;
+    d.addEventListener("mousedown", ev => { if (ev.target.tagName !== "INPUT" && ev.target.tagName !== "BUTTON") { S.sel = i; render(); } });
+    d.querySelectorAll("input").forEach(inp => inp.addEventListener("change", () => {
+      const v = parseT(inp.value); if (isNaN(v)) return render();
+      c[+inp.dataset.k] = Math.max(0, Math.min(S.song.duration, v));
+      if (c[1] <= c[0] + 0.2) c[1] = Math.min(S.song.duration, c[0] + 0.2); render();
+    }));
+    d.querySelector('[data-a=play]').onclick = () => playRange(c[0], c[1]);
+    d.querySelector('[data-a=up]').onclick = () => moveClip(i, -1);
+    d.querySelector('[data-a=down]').onclick = () => moveClip(i, 1);
+    d.querySelector('[data-a=del]').onclick = () => removeClip(i);
+    L.appendChild(d);
+    if (i < S.clips.length - 1) L.appendChild(joinEl(S.joins[i], i));
+  });
+}
+function joinEl(j, i) {
+  const d = document.createElement("div"); d.className = "join";
+  const presetOpts = Object.entries(PRESETS).map(([k, p]) => `<option value="${k}" ${j.preset === k ? "selected" : ""}>${p.label}</option>`).join("") +
+    `<option value="custom" ${j.preset === "custom" ? "selected" : ""}>Custom</option>`;
+  d.innerHTML = `<label>Transition ${i + 1}→${i + 2}<select data-k="preset">${presetOpts}</select></label>
+    <label>Blend <select data-k="blend">
+      <option value="crossfade">Crossfade</option><option value="eq">DJ bass swap</option><option value="overlay">Overlay</option></select></label>
+    <label title="Blend length in beats (4 = one bar)">Length <input type="number" data-k="beats" min="0.25" step="0.25" value="${j.beats}"> beats</label>
+    <span>${FX.map(([k, n, tip]) => `<button class="chip ${j.fx.includes(k) ? "on" : ""}" data-fx="${k}" title="${tip}">${n}</button>`).join(" ")}</span>
+    <label title="Effect volume">FX vol <input type="range" min="0" max="2" step="0.1" value="${j.fx_level}" data-k="fx_level" style="width:80px"></label>`;
+  d.querySelector('[data-k=blend]').value = j.blend;
+  d.querySelector('[data-k=preset]').onchange = ev => {
+    const p = PRESETS[ev.target.value]; j.preset = ev.target.value;
+    if (p) { j.blend = p.blend; j.beats = p.beats; j.fx = [...p.fx]; } render();
+  };
+  d.querySelector('[data-k=blend]').onchange = ev => { j.blend = ev.target.value; j.preset = "custom"; render(); };
+  d.querySelector('[data-k=beats]').onchange = ev => { j.beats = Math.max(0.25, +ev.target.value || 0.5); j.preset = "custom"; render(); };
+  d.querySelector('[data-k=fx_level]').oninput = ev => { j.fx_level = +ev.target.value; };
+  d.querySelectorAll("[data-fx]").forEach(b => b.onclick = () => {
+    const k = b.dataset.fx; j.fx = j.fx.includes(k) ? j.fx.filter(x => x !== k) : [...j.fx, k]; j.preset = "custom"; render();
+  });
+  return d;
+}
+
+// ---------- playback ----------
+let stopAt = null;
+function playRange(a, b) { const au = $("#srcAudio"); au.currentTime = a; stopAt = b; au.play(); }
+function togglePlay() { const au = $("#srcAudio"); stopAt = null; au.paused ? au.play() : au.pause(); }
+$("#playSrc").onclick = togglePlay;
+$("#srcAudio").addEventListener("play", () => $("#playSrc").textContent = "❚❚");
+$("#srcAudio").addEventListener("pause", () => $("#playSrc").textContent = "▶");
+function tick() {
+  const au = $("#srcAudio");
+  if (stopAt !== null && au.currentTime >= stopAt) { au.pause(); stopAt = null; }
+  if (S.song) { $("#srcTime").textContent = `${fmt(au.currentTime)} / ${fmt(S.song.duration)}`; drawSource(); }
+  if (S.result) drawResult();
+  requestAnimationFrame(tick);
+}
+
+// ---------- top-level ----------
+function render() {
+  renderList(); drawSource();
+  const est = estimate(); $("#estLen").textContent = isNaN(est) ? "–" : `${fmt(est)} (${S.clips.length} clip${S.clips.length === 1 ? "" : "s"})`;
+  $("#renderBtn").disabled = !S.song || !S.clips.length;
+  $("#renderHint").textContent = S.song && !S.clips.length ? "Add at least one clip" : "";
+}
+function segBind(id, key, after) {
+  $(id).querySelectorAll("button").forEach(b => b.onclick = () => {
+    $(id).querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); S[key] = b.dataset.v; after && after();
+  });
+}
+segBind("#snapSeg", "snap"); segBind("#endSeg", "ending");
+
+async function openFile(f) {
+  if (!f) return;
+  busy(`Analyzing “${f.name}” (beats, bars, sections)…`);
+  try {
+    const song = await api("/api/load", { method: "POST", body: f, headers: { "X-Filename": encodeURIComponent(f.name) } }, true);
+    S.song = song; S.clips = []; S.joins = []; S.sel = -1; S.result = null;
+    $("#srcAudio").src = URL.createObjectURL(f);
+    $("#info").textContent = `${song.name} · ${fmt(song.duration)} · ~${Math.round(60 / song.beat)} BPM · ${song.bars.length - 1} bars`;
+    $("#dropZone").style.display = "none"; $("#srcWrap").style.display = ""; $("#srcTransport").style.display = "";
+    $("#resultBox").style.display = "none";
+    render();
+  } catch (e) { toast("Could not open file: " + e.message); }
+  busy(null);
+}
+$("#openBtn").onclick = () => $("#file").click();
+$("#file").onchange = e => openFile(e.target.files[0]);
+const dz = $("#dropZone");
+["dragover", "dragenter"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("over"); }));
+document.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) openFile(f); });
+
+$("#sortBtn").onclick = () => { S.clips.sort((a, b) => a[0] - b[0]); S.sel = -1; render(); };
+$("#clearBtn").onclick = () => { S.clips = []; S.joins = []; S.sel = -1; render(); };
+
+$("#autoBtn").onclick = async () => {
+  if (!S.song) return toast("Open a song first.");
+  busy("Choosing clips…");
+  try {
+    const r = await api("/api/suggest", { id: S.song.id, length: +$("#target").value, keep: S.clips,
+                                           start: S.clips.length ? "any" : "intro", end: "auto" });
+    S.clips = r.clips; S.joins = []; syncJoins(); S.sel = -1;
+    const endBtn = $("#endSeg").querySelector(`[data-v=${r.natural_end ? "natural" : "fade"}]`); endBtn.click();
+    render();
+  } catch (e) { toast(e.message); }
+  busy(null);
+};
+
+$("#renderBtn").onclick = async () => {
+  busy("Rendering preview…");
+  try {
+    const r = await api("/api/render", { id: S.song.id, clips: S.clips, snap: S.snap,
+      joins: S.joins.map(j => ({ blend: j.blend, beats: j.beats, fx: j.fx, fx_level: j.fx_level, position: "before", hold: 0.5 })),
+      ending: S.ending, fade_out: +$("#fadeOut").value, fade_in: +$("#fadeIn").value });
+    S.result = r;
+    const blob = await (await fetch(`/api/result/${r.rid}?format=wav`)).blob();
+    $("#resAudio").src = URL.createObjectURL(blob);
+    $("#resLen").textContent = fmt(r.duration);
+    $("#resCuts").textContent = r.cuts.length ? `· transitions at ${r.cuts.map(fmt).join(", ")}` : "";
+    if (S.ending === "natural" && !r.natural_end) toast("Last clip doesn't reach the song's end, so it fades out instead.");
+    $("#resultBox").style.display = ""; drawResult();
+  } catch (e) { toast("Render failed: " + e.message); }
+  busy(null);
+};
+for (const [id, fmtx] of [["#dlMp3", "mp3"], ["#dlWav", "wav"], ["#dlFlac", "flac"]])
+  $(id).onclick = () => { if (S.result) location.href = `/api/result/${S.result.rid}?format=${fmtx}&download=1`; };
+window.addEventListener("resize", () => { drawSource(); drawResult(); });
+render(); requestAnimationFrame(tick);
+</script>
+</body>
+</html>

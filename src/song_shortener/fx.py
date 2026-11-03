@@ -97,10 +97,10 @@ def sweep(x: np.ndarray, sr: int) -> np.ndarray:
     return _stft_mask(x, sr, mask)
 
 
-def apply(out: np.ndarray, audio: np.ndarray, sr: int, joins: list[tuple[int, int, int]],
-          beat_s: float, effects: list[str], seed: int = 1) -> np.ndarray:
+def apply(out: np.ndarray, audio: np.ndarray, sr: int, joins: list[tuple], beat_s: float,
+          seed: int = 1) -> np.ndarray:
     """joins: (cut sample in output, end sample of outgoing part, start sample of incoming
-    part in the original audio)."""
+    part in the original audio, Transition with .fx and .fx_level)."""
     if audio.shape[0] == 1:
         audio = np.repeat(audio, 2, axis=0)
     if out.shape[0] == 1:
@@ -108,21 +108,26 @@ def apply(out: np.ndarray, audio: np.ndarray, sr: int, joins: list[tuple[int, in
     rng = np.random.default_rng(seed)
     beat = int(beat_s * sr)
     bar = 4 * beat
-    for cut, a_end, b_start in joins:
+    for cut, a_end, b_start, tr in joins:
+        effects, k = tr.fx, tr.fx_level
+        if not effects:
+            continue
         music = _rms(out[:, max(0, cut - 2 * bar):cut + 2 * bar])
         if "sweep" in effects:
             s0 = max(0, cut - bar)
             out[:, s0:cut] = sweep(out[:, s0:cut], sr)
         if "riser" in effects:
             n = min(2 * bar, cut)
-            out[:, cut - n:cut] += riser(n, sr, 0.5 * music, rng)
+            out[:, cut - n:cut] += riser(n, sr, 0.5 * k * music, rng)
         if "swell" in effects:
             n = min(2 * bar, cut)
             hit = audio[:, b_start:b_start + beat]
-            out[:, cut - n:cut] += swell(hit, n, sr, 0.6 * music, rng)
+            if hit.shape[1] > 0:
+                out[:, cut - n:cut] += swell(hit, n, sr, 0.6 * k * music, rng)
         if "echo" in effects:
-            tail = audio[:, a_end - beat:a_end]
-            e = echo(tail, sr, beat_s, 0.28 * music)
-            m = min(e.shape[1], out.shape[1] - cut)
-            out[:, cut:cut + m] += e[:, :m]
+            tail = audio[:, max(0, a_end - beat):a_end]
+            if tail.shape[1] > 0:
+                e = echo(tail, sr, beat_s, 0.28 * k * music)
+                m = min(e.shape[1], out.shape[1] - cut)
+                out[:, cut:cut + m] += e[:, :m]
     return out
