@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from song_shortener import audio_io
-from song_shortener.analysis import analyze, sections
-from song_shortener.cli import main as cli_main, parse_range, parse_time
-from song_shortener.planner import Settings, plan
-from song_shortener.render import Transition, render_parts, segment_times
+from audio_editor_tool import audio_io
+from audio_editor_tool.analysis import analyze, sections
+from audio_editor_tool.cli import main as cli_main, parse_range, parse_time
+from audio_editor_tool.planner import Settings, plan
+from audio_editor_tool.render import Transition, render_parts, segment_times
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -80,7 +80,7 @@ def test_cli_writes_output(demo, tmp_path):
 
 def test_gui_server_round_trip(demo):
     from http.server import ThreadingHTTPServer
-    from song_shortener import gui
+    from audio_editor_tool import gui
 
     path, *_ = demo
     server = ThreadingHTTPServer(("127.0.0.1", 0), gui.Handler)
@@ -92,7 +92,7 @@ def test_gui_server_round_trip(demo):
         return json.load(urllib.request.urlopen(req))
 
     try:
-        assert b"Song Shortener" in urllib.request.urlopen(base + "/").read()
+        assert b"Audio Editor Tool" in urllib.request.urlopen(base + "/").read()
         song = post("/api/load", path.read_bytes(), {"X-Filename": "demo.wav"})
         assert song["sections"] and song["peaks"]
         body = json.dumps({"id": song["id"], "clips": [[7.9, 23.6], [55.1, 70.8], [86.6, 102.3]],

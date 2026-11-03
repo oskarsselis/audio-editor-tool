@@ -39,7 +39,7 @@ def fmt(t: float) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="song-shortener",
+        prog="audio-editor-tool",
         description="Make a shorter edit of a song with smooth, beat-matched transitions.",
     )
     ap.add_argument("input", help="audio file (mp3, wav, flac, m4a, ...)")

@@ -1,6 +1,6 @@
 """Visual editor: a local web app that opens in its own window.
 
-Run `song-shortener-gui`. Everything stays on your computer; the server only
+Run `audio-editor-tool-gui`. Everything stays on your computer; the server only
 listens on 127.0.0.1.
 """
 
@@ -26,7 +26,7 @@ import numpy as np
 
 from . import audio_io
 
-WORKDIR = Path(tempfile.mkdtemp(prefix="song-shortener-"))
+WORKDIR = Path(tempfile.mkdtemp(prefix="audio-editor-tool-"))
 SONGS: dict[str, dict] = {}
 RESULTS: dict[str, dict] = {}
 LOCK = threading.Lock()
@@ -156,7 +156,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlparse(self.path)
         if url.path in ("/", "/index.html"):
-            html = resources.files("song_shortener").joinpath("web/index.html").read_bytes()
+            html = resources.files("audio_editor_tool").joinpath("web/index.html").read_bytes()
             return self._send(html, "text/html; charset=utf-8")
         if url.path.startswith("/api/result/"):
             rid = url.path.rsplit("/", 1)[-1]
@@ -224,14 +224,14 @@ def _open_window(url: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="song-shortener-gui", description="Open the visual editor.")
+    ap = argparse.ArgumentParser(prog="audio-editor-tool-gui", description="Open the visual editor.")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-window", action="store_true", help="don't open a window, just serve")
     args = ap.parse_args(argv)
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
-    print(f"Song Shortener editor running at {url}  (Ctrl+C to quit)")
+    print(f"Audio Editor Tool running at {url}  (Ctrl+C to quit)")
     if not args.no_window:
         threading.Timer(0.5, _open_window, args=(url,)).start()
     try:

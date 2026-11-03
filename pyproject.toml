@@ -1,7 +1,7 @@
 [project]
-name = "song-shortener"
+name = "audio-editor-tool"
 version = "0.1.0"
-description = "Shorten songs to a target length with smooth, beat-matched transitions"
+description = "Audio editor for short song edits with smooth, beat-matched transitions"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Oskars Selis" }]
@@ -14,8 +14,8 @@ dependencies = [
 ]
 
 [project.scripts]
-song-shortener = "song_shortener.cli:main"
-song-shortener-gui = "song_shortener.gui:main"
+audio-editor-tool = "audio_editor_tool.cli:main"
+audio-editor-tool-gui = "audio_editor_tool.gui:main"
 
 [build-system]
 requires = ["uv_build>=0.11.32,<0.12.0"]

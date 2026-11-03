@@ -1,4 +1,4 @@
-# Song Shortener
+# Audio Editor Tool
 
 Make short edits of a song with smooth, beat-matched transitions. Pick the parts you want in a visual editor (or let the tool pick them for a target length). It joins them on the beat with crossfades and DJ-style transition effects.
 
@@ -13,15 +13,15 @@ Requirements:
 - [ffmpeg](https://ffmpeg.org/download.html) (optional) to read and export MP3/M4A. WAV, FLAC and OGG work without it.
 
 ```bash
-git clone https://github.com/<your-user>/song-shortener.git
-cd song-shortener
+git clone https://github.com/oskarsselis/audio-editor-tool.git
+cd audio-editor-tool
 uv sync
 ```
 
 ## Editor window
 
 ```bash
-uv run song-shortener-gui
+uv run audio-editor-tool-gui
 ```
 
 This opens the editor in its own window. It uses Chrome/Edge app mode if one is installed, and otherwise your default browser. Everything runs locally on your computer.
@@ -48,19 +48,19 @@ This opens the editor in its own window. It uses Chrome/Edge app mode if one is 
 
 ```bash
 # ~1:30 version, chosen automatically
-uv run song-shortener song.mp3 -l 1:30
+uv run audio-editor-tool song.mp3 -l 1:30
 
 # Must include 1:05–1:40, leave out 2:10–2:30
-uv run song-shortener song.mp3 -l 2:00 -k 1:05-1:40 -s 2:10-2:30 -o edit.mp3
+uv run audio-editor-tool song.mp3 -l 2:00 -k 1:05-1:40 -s 2:10-2:30 -o edit.mp3
 
 # Your own parts, with echo + swell at the joins and a fade-out
-uv run song-shortener song.mp3 -p 1:41-1:58,2:25-2:44 --fx echo,swell --end fade
+uv run audio-editor-tool song.mp3 -p 1:41-1:58,2:25-2:44 --fx echo,swell --end fade
 
 # Show the section map
-uv run song-shortener song.mp3 --analyze
+uv run audio-editor-tool song.mp3 --analyze
 ```
 
-Run `uv run song-shortener --help` for all options: `--blend crossfade|eq|overlay`, `--xfade BEATS`, `--fx riser,swell,echo,sweep`, `--start`, `--end`, `--snap`, `--fade-out`, `--tolerance`, `--plan-json` and more.
+Run `uv run audio-editor-tool --help` for all options: `--blend crossfade|eq|overlay`, `--xfade BEATS`, `--fx riser,swell,echo,sweep`, `--start`, `--end`, `--snap`, `--fade-out`, `--tolerance`, `--plan-json` and more.
 
 ## How it works
 
@@ -72,7 +72,7 @@ Run `uv run song-shortener --help` for all options: `--blend crossfade|eq|overla
 ## Project layout
 
 ```
-src/song_shortener/
+src/audio_editor_tool/
   analysis.py   beats, bars, similarity, sections
   planner.py    automatic clip selection
   render.py     joining clips, blends, limiter
